@@ -44,7 +44,9 @@ curl "https://graph.facebook.com/v23.0/me/accounts?fields=id,name,access_token&a
 
 ## ฟอนต์ภาษาไทยจาก Google Fonts
 
-ดาวน์โหลด **Noto Sans Thai** จาก [Google Fonts](https://fonts.google.com/noto/specimen/Noto+Sans+Thai) แล้วแตกไฟล์ จากนั้นตั้งค่า `FONT_PATH` ไปยังไฟล์ `.ttf` เช่น:
+โปรเจกต์นี้รวม **Noto Sans Thai** ไว้แล้วที่ `fonts/NotoSansThai-Regular.ttf` และไฟล์ใบอนุญาตไว้ที่ `fonts/OFL.txt` โดยดาวน์โหลดจาก [Google Fonts](https://fonts.google.com/noto/specimen/Noto+Sans+Thai) และคลัง [Google Fonts บน GitHub](https://github.com/google/fonts/tree/main/ofl/notosansthai) ดังนั้นไม่ต้องดาวน์โหลดฟอนต์เพิ่มเมื่อใช้โค้ดใน repository นี้
+
+ตั้งค่า path ได้ดังนี้:
 
 ```bash
 export FONT_PATH="$PWD/fonts/NotoSansThai-Regular.ttf"

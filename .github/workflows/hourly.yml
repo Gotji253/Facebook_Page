@@ -24,13 +24,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Restore Thai font
-        env:
-          FONT_TTF_BASE64: ${{ secrets.FONT_TTF_BASE64 }}
-        run: |
-          mkdir -p fonts
-          printf '%s' "$FONT_TTF_BASE64" | base64 --decode > fonts/NotoSansThai-Regular.ttf
-
       - name: Run poster
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

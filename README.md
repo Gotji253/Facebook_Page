@@ -37,16 +37,35 @@ URL RSS แก้ได้ด้วย `RSS_BBC_URL`, `RSS_ESPN_URL` และ `
 
 ## การค้นหาภาพที่เกี่ยวข้อง
 
-โดยค่าเริ่มต้น `IMAGE_PROVIDER=wikimedia` สคริปต์จะค้นหาภาพจาก Wikimedia Commons ด้วยชื่อข่าว เรียกดูข้อมูล license/ผู้สร้าง และรับเฉพาะภาพที่มีขนาดอย่างน้อย `1000×525` หากค้นหาไม่สำเร็จหรือภาพเล็กเกินไป จะใช้พื้นหลังแบรนด์แทน
+โดยค่าเริ่มต้น `IMAGE_PROVIDER=auto` สคริปต์จะลองค้นหาตามลำดับ Wikimedia Commons, Unsplash, Reddit, Bing และ Google เฉพาะ provider ที่มีการตั้งค่า key/ข้อมูลจำเป็นแล้ว โดยจะรับเฉพาะภาพที่มีขนาดอย่างน้อย `1000×525` และกรองคำที่สื่อว่าเป็น collage, montage, banner, poster, logo, screenshot หรือ thumbnail หากค้นหาไม่สำเร็จ จะใช้พื้นหลังแบรนด์แทน
 
-หากต้องการใช้ Unsplash ให้สร้าง Access Key แล้วตั้งค่า:
+เลือก provider เดียวได้ด้วย `IMAGE_PROVIDER=wikimedia`, `unsplash`, `reddit`, `bing` หรือ `google` หรือใช้ `IMAGE_PROVIDER=none` เพื่อไม่ดาวน์โหลดภาพภายนอก
+
+สำหรับ Unsplash ให้ตั้งค่า:
 
 ```env
 IMAGE_PROVIDER=unsplash
 UNSPLASH_ACCESS_KEY=your_access_key
 ```
 
-ระบบจะเลือกภาพที่มีขนาดผ่านเกณฑ์และเพิ่มข้อมูลเครดิตใน caption อย่างไรก็ตาม ผู้ใช้ยังต้องตรวจสอบ license และสิทธิ์การใช้ภาพแต่ละรายการก่อนใช้งานเชิงพาณิชย์ หากต้องการไม่ดาวน์โหลดภาพจากภายนอก ให้ตั้ง `IMAGE_PROVIDER=none`
+สำหรับ Reddit ใช้ subreddit ค่าเริ่มต้น `soccer` หรือเปลี่ยนด้วย `REDDIT_SUBREDDIT` ระบบจะเลือกเฉพาะโพสต์ประเภท image ที่ไม่ติด NSFW และมี permalink สำหรับเครดิต แต่รูปจากผู้ใช้ Reddit ยังต้องตรวจสิทธิ์ก่อนใช้
+
+สำหรับ Bing Image Search ให้ตั้งค่า:
+
+```env
+IMAGE_PROVIDER=bing
+BING_IMAGE_SEARCH_KEY=your_key
+```
+
+สำหรับ Google Custom Search ให้สร้าง Programmable Search Engine ที่เปิด image search แล้วตั้งค่า:
+
+```env
+IMAGE_PROVIDER=google
+GOOGLE_CUSTOM_SEARCH_KEY=your_key
+GOOGLE_CUSTOM_SEARCH_CX=your_search_engine_id
+```
+
+ผลค้นหาจาก Bing และ Google เป็นเพียงตัวชี้ไปยังรูปบนเว็บไซต์อื่น ไม่ใช่การรับประกัน license แม้ API จะกรอง `imageType`, `safeSearch` และ `rights` แล้วก็ตาม ผู้ใช้ต้องตรวจสอบ license และสิทธิ์การใช้ภาพแต่ละรายการก่อนใช้งานเชิงพาณิชย์เสมอ
 
 ## การตั้งค่า Page Access Token
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Standalone hourly football-news poster for a Facebook Page."""
 from __future__ import annotations
-import argparse, hashlib, json, logging, os, re, sys, tempfile
+import argparse, hashlib, html, json, logging, os, re, sys, tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import feedparser
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -85,13 +85,13 @@ def search_wikimedia(item: NewsItem) -> tuple[str, str, str]:
         min_height = int(env("IMAGE_MIN_HEIGHT", "525"))
         for page in pages:
             info = (page.get("imageinfo") or [{}])[0]
-            if int(info.get("width", 0)) < min_width or int(info.get("height", 0)) < min_height:
+            if not image_is_acceptable(str(info.get("url") or info.get("thumburl") or ""), int(info.get("width", 0)), int(info.get("height", 0)), str(page.get("title", ""))):
                 continue
             metadata = info.get("extmetadata", {})
             license_name = str((metadata.get("LicenseShortName") or {}).get("value", ""))
             artist = re.sub(r"<[^>]+>", "", str((metadata.get("Artist") or {}).get("value", ""))).strip()
             credit = f"ภาพ: {artist} ({license_name})" if artist or license_name else "ภาพ: Wikimedia Commons"
-            return str(info.get("thumburl") or info.get("url") or ""), "Wikimedia Commons", credit
+            return str(info.get("url") or info.get("thumburl") or ""), "Wikimedia Commons", credit
     except Exception as exc:
         LOG.warning("Wikimedia image search failed: %s", exc)
     return "", "", ""
@@ -111,7 +111,7 @@ def search_unsplash(item: NewsItem) -> tuple[str, str, str]:
         min_width = int(env("IMAGE_MIN_WIDTH", "1000"))
         min_height = int(env("IMAGE_MIN_HEIGHT", "525"))
         for photo in data.get("results", []):
-            if int(photo.get("width", 0)) < min_width or int(photo.get("height", 0)) < min_height:
+            if not image_is_acceptable(str(photo.get("urls", {}).get("regular", "")), int(photo.get("width", 0)), int(photo.get("height", 0)), str(photo.get("alt_description") or photo.get("description") or "")):
                 continue
             user = photo.get("user", {})
             credit = f"ภาพ: {user.get('name', 'Unsplash')} — {photo.get('links', {}).get('html', '')}"
@@ -121,13 +121,85 @@ def search_unsplash(item: NewsItem) -> tuple[str, str, str]:
     return "", "", ""
 
 
+IMAGE_BAD_TERMS = ("collage", "montage", "banner", "poster", "logo", "screenshot", "sprite", "thumbnail", "wallpaper")
+
+
+def image_is_acceptable(url: str, width: int, height: int, title: str = "") -> bool:
+    if not url or width < int(env("IMAGE_MIN_WIDTH", "1000")) or height < int(env("IMAGE_MIN_HEIGHT", "525")):
+        return False
+    haystack = f"{url} {title}".lower()
+    return not any(term in haystack for term in IMAGE_BAD_TERMS)
+
+
+def search_reddit(item: NewsItem) -> tuple[str, str, str]:
+    subreddit = env("REDDIT_SUBREDDIT", "soccer")
+    try:
+        data = http_get(
+            f"https://www.reddit.com/r/{subreddit}/search.json",
+            params={"q": image_query(item), "sort": "top", "t": "week", "restrict_sr": "1", "limit": 20, "raw_json": "1"},
+            headers={"Accept": "application/json"},
+        ).json()
+        for child in data.get("data", {}).get("children", []):
+            post = child.get("data", {})
+            if post.get("over_18") or post.get("is_video"): continue
+            url = str(post.get("url_overridden_by_dest") or post.get("url") or "")
+            width, height = int(post.get("preview", {}).get("images", [{}])[0].get("source", {}).get("width", 0)), int(post.get("preview", {}).get("images", [{}])[0].get("source", {}).get("height", 0))
+            if post.get("post_hint") == "image" and image_is_acceptable(url, width, height, str(post.get("title", ""))):
+                permalink = "https://www.reddit.com" + str(post.get("permalink", ""))
+                return url, "Reddit", f"ภาพจาก Reddit: {permalink}"
+    except Exception as exc:
+        LOG.warning("Reddit image search failed: %s", exc)
+    return "", "", ""
+
+
+def search_bing(item: NewsItem) -> tuple[str, str, str]:
+    key = env("BING_IMAGE_SEARCH_KEY")
+    if not key:
+        return "", "", ""
+    try:
+        data = http_get(
+            env("BING_IMAGE_SEARCH_ENDPOINT", "https://api.bing.microsoft.com/v7.0/images/search"),
+            params={"q": image_query(item), "count": 20, "safeSearch": "Strict", "imageType": "Photo", "size": "Large", "aspect": "Wide"},
+            headers={"Ocp-Apim-Subscription-Key": key},
+        ).json()
+        for image in data.get("value", []):
+            url = str(image.get("contentUrl", "")); title = str(image.get("name", ""))
+            if image_is_acceptable(url, int(image.get("width", 0)), int(image.get("height", 0)), title):
+                return url, "Bing Image Search", f"ภาพจาก Bing: {image.get('hostPageUrl', '')}"
+    except Exception as exc:
+        LOG.warning("Bing image search failed: %s", exc)
+    return "", "", ""
+
+
+def search_google(item: NewsItem) -> tuple[str, str, str]:
+    key, cx = env("GOOGLE_CUSTOM_SEARCH_KEY"), env("GOOGLE_CUSTOM_SEARCH_CX")
+    if not key or not cx:
+        return "", "", ""
+    try:
+        data = http_get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={"key": key, "cx": cx, "q": image_query(item), "searchType": "image", "num": 10, "safe": "active", "imgType": "photo", "imgSize": "large", "rights": "cc_publicdomain|cc_attribute|cc_sharealike"},
+        ).json()
+        for result in data.get("items", []):
+            image = result.get("image", {}); url = str(result.get("link", ""))
+            if image_is_acceptable(url, int(image.get("width", 0)), int(image.get("height", 0)), str(result.get("title", ""))):
+                return url, "Google Custom Search", f"ภาพจาก Google: {result.get('image', {}).get('contextLink', '')}"
+    except Exception as exc:
+        LOG.warning("Google image search failed: %s", exc)
+    return "", "", ""
+
+
 def find_related_image(item: NewsItem) -> tuple[str, str, str]:
     provider = env("IMAGE_PROVIDER", "wikimedia").lower()
-    if provider == "unsplash":
-        return search_unsplash(item)
-    if provider == "none":
-        return "", "", ""
-    return search_wikimedia(item)
+    providers = [provider] if provider not in ("auto", "all") else ["wikimedia", "unsplash", "reddit", "bing", "google"]
+    searchers = {"wikimedia": search_wikimedia, "unsplash": search_unsplash, "reddit": search_reddit, "bing": search_bing, "google": search_google}
+    for name in providers:
+        searcher = searchers.get(name)
+        if not searcher: continue
+        url, source, credit = searcher(item)
+        if url: return url, source, credit
+    LOG.warning("No approved image found; using brand gradient fallback")
+    return "", "", ""
 
 
 def load_state(path: Path) -> dict[str, Any]:

@@ -71,12 +71,12 @@ python football_poster.py
 
 ในแต่ละรอบ สคริปต์จะดึง RSS ทั้งหมดแบบ best-effort, ข้ามฟีดหรือรูปที่ล้มเหลว, ส่งข่าวที่ยังไม่อยู่ใน state ให้ AI ให้คะแนนใน **หนึ่ง API call**, เลือกข่าวคะแนนสูงสุด, เรียก AI เพื่อเขียนโพสต์, สร้างภาพ และเรียก `/{page-id}/photos` ก่อนบันทึก id ข่าวลง state เฉพาะเมื่อ Facebook ตอบสำเร็จ
 
-## cron ทุกชั่วโมง
+## cron ทุก 2 ชั่วโมง
 
 เพิ่มใน `crontab -e` โดยเปลี่ยน path ให้ตรงกับเครื่องจริง:
 
 ```cron
-0 * * * * flock -n /tmp/facebook-page-football.lock sh -c 'cd /opt/Facebook_Page && . .venv/bin/activate && set -a && . ./.env && set +a && python football_poster.py' >> /opt/Facebook_Page/poster.log 2>&1
+0 */2 * * * flock -n /tmp/facebook-page-football.lock sh -c 'cd /opt/Facebook_Page && . .venv/bin/activate && set -a && . ./.env && set +a && python football_poster.py' >> /opt/Facebook_Page/poster.log 2>&1
 ```
 
 `flock` ช่วยป้องกันการรันซ้อนกันซึ่งอาจทำให้เกิดโพสต์ซ้ำ และ `state.json` ต้องอยู่บน disk ที่คงอยู่หลังรีสตาร์ท

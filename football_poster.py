@@ -86,37 +86,50 @@ def rank_news(items: list[NewsItem]) -> dict[str, dict[str, Any]]:
         {
             "id": item.id,
             "source": item.source,
-            "title": item.title,
-            "summary": item.summary[:600],
+            "title": item.title[:250],
+            "summary": item.summary[:400],
             "published": item.published,
         }
-        for item in items
+        for item in items[:40]
     ]
 
-    response = OpenAI().chat.completions.create(
-        model=env("OPENAI_MODEL", "gpt-5-mini"),
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "คุณเป็นบรรณาธิการข่าวฟุตบอลสำหรับผู้อ่านชาวไทย "
-                    "ให้คะแนนข่าวทุกรายการและตอบกลับเป็น JSON object เท่านั้น "
-                    "ห้ามใช้ Markdown หรือ code fence เช่น ```json "
-                    "พิจารณาทีม/นักเตะดัง ดราม่า ทรานส์เฟอร์ ผลแข่งสำคัญ "
-                    "และความสดใหม่ คะแนนอยู่ระหว่าง 0-100 "
-                    "และ is_worthy=true เมื่อเหมาะสำหรับโพสต์บนเพจข่าวฟุตบอลไทย "
-                    "JSON ต้องมีโครงสร้าง {\"items\":[{\"id\":\"...\",\"score\":0,"
-                    "\"is_worthy\":true,\"main_angle\":\"...\",\"reason\":\"...\"}]}"
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(payload, ensure_ascii=False),
-            },
-        ],
-        response_format={"type": "json_object"},
-        max_completion_tokens=5000,
-    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "คุณเป็นบรรณาธิการข่าวฟุตบอลสำหรับผู้อ่านชาวไทย "
+                "ให้คะแนนข่าวทุกรายการและตอบกลับเป็น JSON object เท่านั้น "
+                "ห้ามใช้ Markdown หรือ code fence "
+                "พิจารณาทีม/นักเตะดัง ดราม่า ทรานส์เฟอร์ ผลแข่งสำคัญ "
+                "และความสดใหม่ คะแนนอยู่ระหว่าง 0-100 "
+                "และ is_worthy=true เมื่อเหมาะสำหรับโพสต์บนเพจข่าวฟุตบอลไทย "
+                "ตอบสั้น กระชับ ไม่ต้องอธิบายเพิ่มเติม "
+                "JSON ต้องมีโครงสร้าง {\"items\":[{\"id\":\"...\",\"score\":0,"
+                "\"is_worthy\":true,\"main_angle\":\"...\",\"reason\":\"...\"}]}"
+            ),
+        },
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+
+    client = OpenAI()
+    request_args = {
+        "model": env("OPENAI_MODEL", "gpt-5-mini"),
+        "messages": messages,
+        "response_format": {"type": "json_object"},
+        "max_completion_tokens": 5000,
+    }
+    try:
+        response = client.chat.completions.create(
+            **request_args,
+            reasoning_effort="minimal",
+        )
+    except Exception as exc:
+        # บาง endpoint/SDK รุ่นเก่าอาจไม่รองรับ minimal ให้ลอง low แทน
+        LOG.warning("reasoning_effort=minimal failed; retrying with low: %s", exc)
+        response = client.chat.completions.create(
+            **request_args,
+            reasoning_effort="low",
+        )
 
     if not response.choices:
         print("OpenAI ไม่ส่ง choices กลับมา")

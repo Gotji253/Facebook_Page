@@ -81,7 +81,17 @@ def schema(name: str, properties: dict[str, Any], required: list[str]) -> dict[s
     return {"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": {"type": "object", "properties": properties, "required": required, "additionalProperties": False}}}
 
 def rank_news(items: list[NewsItem]) -> dict[str, dict[str, Any]]:
-    payload = [asdict(item) for item in items]
+    # ส่งเฉพาะฟิลด์ที่จำเป็นและจำกัด summary เพื่อไม่ให้ context ใหญ่เกินไป
+    payload = [
+        {
+            "id": item.id,
+            "source": item.source,
+            "title": item.title,
+            "summary": item.summary[:600],
+            "published": item.published,
+        }
+        for item in items
+    ]
 
     response = OpenAI().chat.completions.create(
         model=env("OPENAI_MODEL", "gpt-5-mini"),
@@ -105,10 +115,29 @@ def rank_news(items: list[NewsItem]) -> dict[str, dict[str, Any]]:
             },
         ],
         response_format={"type": "json_object"},
-        max_completion_tokens=2500,
+        max_completion_tokens=5000,
     )
 
-    raw_response = response.choices[0].message.content or ""
+    if not response.choices:
+        print("OpenAI ไม่ส่ง choices กลับมา")
+        print(response.model_dump_json(indent=2))
+        raise RuntimeError("OpenAI response มี choices ว่าง")
+
+    choice = response.choices[0]
+    message = choice.message
+    raw_response = message.content or ""
+
+    # แสดง metadata ที่ช่วยวินิจฉัยกรณี content ว่างหรือถูกตัดจบ
+    if not raw_response.strip():
+        print("OpenAI response ไม่มี content")
+        print("finish_reason:", choice.finish_reason)
+        print("refusal:", getattr(message, "refusal", None))
+        print("OpenAI response:")
+        print(response.model_dump_json(indent=2))
+        raise RuntimeError(
+            f"OpenAI ไม่ส่งข้อความกลับมา (finish_reason={choice.finish_reason})"
+        )
+
     cleaned_response = raw_response.strip()
     cleaned_response = re.sub(
         r"^```(?:json)?\s*", "", cleaned_response, flags=re.IGNORECASE

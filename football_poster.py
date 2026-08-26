@@ -19,7 +19,7 @@ W, H = 1200, 630
 
 @dataclass
 class NewsItem:
-    id: str; source: str; title: str; summary: str; url: str; image_url: str = ""; published: str = ""
+    id: str; source: str; title: str; summary: str; url: str; image_url: str = ""; published: str = ""; image_source: str = ""; image_credit: str = ""
 
 def env(name: str, default: str = "") -> str: return os.getenv(name, default).strip()
 def required_env(name: str) -> str:
@@ -60,6 +60,75 @@ def fetch_feed(source: str, feed_url: str) -> list[NewsItem]:
         LOG.info("%s: found %d entries", source, len(result)); return result
     except Exception as exc:
         LOG.warning("RSS unavailable (%s): %s", source, exc); return []
+
+def image_query(item: NewsItem) -> str:
+    query = re.sub(r"[^\w\s-]", " ", item.title, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", query).strip()[:180]
+
+
+def search_wikimedia(item: NewsItem) -> tuple[str, str, str]:
+    params = {
+        "action": "query",
+        "generator": "search",
+        "gsrsearch": image_query(item),
+        "gsrnamespace": 6,
+        "gsrlimit": 10,
+        "prop": "imageinfo",
+        "iiprop": "url|size|extmetadata",
+        "iiurlwidth": 1600,
+        "format": "json",
+    }
+    try:
+        data = http_get("https://commons.wikimedia.org/w/api.php", params=params).json()
+        pages = data.get("query", {}).get("pages", {}).values()
+        min_width = int(env("IMAGE_MIN_WIDTH", "1000"))
+        min_height = int(env("IMAGE_MIN_HEIGHT", "525"))
+        for page in pages:
+            info = (page.get("imageinfo") or [{}])[0]
+            if int(info.get("width", 0)) < min_width or int(info.get("height", 0)) < min_height:
+                continue
+            metadata = info.get("extmetadata", {})
+            license_name = str((metadata.get("LicenseShortName") or {}).get("value", ""))
+            artist = re.sub(r"<[^>]+>", "", str((metadata.get("Artist") or {}).get("value", ""))).strip()
+            credit = f"ภาพ: {artist} ({license_name})" if artist or license_name else "ภาพ: Wikimedia Commons"
+            return str(info.get("thumburl") or info.get("url") or ""), "Wikimedia Commons", credit
+    except Exception as exc:
+        LOG.warning("Wikimedia image search failed: %s", exc)
+    return "", "", ""
+
+
+def search_unsplash(item: NewsItem) -> tuple[str, str, str]:
+    key = env("UNSPLASH_ACCESS_KEY")
+    if not key:
+        LOG.warning("UNSPLASH_ACCESS_KEY is missing; skipping Unsplash")
+        return "", "", ""
+    try:
+        data = http_get(
+            "https://api.unsplash.com/search/photos",
+            params={"query": image_query(item), "per_page": 10, "content_filter": "high"},
+            headers={"Authorization": f"Client-ID {key}"},
+        ).json()
+        min_width = int(env("IMAGE_MIN_WIDTH", "1000"))
+        min_height = int(env("IMAGE_MIN_HEIGHT", "525"))
+        for photo in data.get("results", []):
+            if int(photo.get("width", 0)) < min_width or int(photo.get("height", 0)) < min_height:
+                continue
+            user = photo.get("user", {})
+            credit = f"ภาพ: {user.get('name', 'Unsplash')} — {photo.get('links', {}).get('html', '')}"
+            return str(photo.get("urls", {}).get("regular", "")), "Unsplash", credit
+    except Exception as exc:
+        LOG.warning("Unsplash image search failed: %s", exc)
+    return "", "", ""
+
+
+def find_related_image(item: NewsItem) -> tuple[str, str, str]:
+    provider = env("IMAGE_PROVIDER", "wikimedia").lower()
+    if provider == "unsplash":
+        return search_unsplash(item)
+    if provider == "none":
+        return "", "", ""
+    return search_wikimedia(item)
+
 
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists(): return {"posted_ids": [], "updated_at": None}
@@ -308,7 +377,8 @@ def main() -> int:
     if not candidates: LOG.info("No news passed the worthiness threshold"); return 0
     item = max(candidates, key=lambda x: float(scores[x.id].get("score", 0)))
     try:
-        post = write_post(item, scores[item.id]); output = Path(args.output); make_image(post["hook"], item.image_url, output, required_env("FONT_PATH")); tags = [str(x).strip() for x in post.get("hashtags", []) if str(x).strip()]; text = "\n\n".join([post["hook"].strip(), post["body"].strip(), post["cta"].strip(), " ".join(tags)])
+        item.image_url, item.image_source, item.image_credit = find_related_image(item)
+        post = write_post(item, scores[item.id]); output = Path(args.output); make_image(post["hook"], item.image_url, output, required_env("FONT_PATH")); tags = [str(x).strip() for x in post.get("hashtags", []) if str(x).strip()]; credit = item.image_credit; text = "\n\n".join([post["hook"].strip(), post["body"].strip(), post["cta"].strip(), " ".join(tags), credit]).strip()
         LOG.info("Selected %s | score=%s | image=%s", item.title, scores[item.id].get("score"), output)
         if args.dry_run: print(json.dumps({"item": asdict(item), "score": scores[item.id], "post": post, "caption": text, "image": str(output)}, ensure_ascii=False, indent=2)); return 0
         result = publish(output, text, required_env("FB_PAGE_ID"), required_env("FB_PAGE_TOKEN")); LOG.info("Published to Facebook: %s", result); state["posted_ids"].append(item.id); save_state(state_path, state); return 0

@@ -29,8 +29,24 @@ cp .env.example .env
 | `FB_API_VERSION` | ไม่ | ค่าเริ่มต้น `v23.0`; เปลี่ยนได้ตาม Graph API version ที่แอปใช้งาน |
 | `STATE_FILE` | ไม่ | ค่าเริ่มต้น `state.json` |
 | `OUTPUT_IMAGE` | ไม่ | ค่าเริ่มต้น `output/latest.jpg` |
+| `IMAGE_PROVIDER` | ไม่ | `wikimedia` หรือ `unsplash`; ใช้ `none` เพื่อใช้พื้นหลังแบรนด์ |
+| `UNSPLASH_ACCESS_KEY` | เฉพาะ Unsplash | Unsplash Access Key เมื่อเลือก `IMAGE_PROVIDER=unsplash` |
+| `IMAGE_MIN_WIDTH` / `IMAGE_MIN_HEIGHT` | ไม่ | ค่าเริ่มต้น `1000` / `525`; ภาพเล็กกว่านี้จะถูกข้าม |
 
 URL RSS แก้ได้ด้วย `RSS_BBC_URL`, `RSS_ESPN_URL` และ `RSS_GOAL_URL` หากผู้ให้บริการเปลี่ยน endpoint
+
+## การค้นหาภาพที่เกี่ยวข้อง
+
+โดยค่าเริ่มต้น `IMAGE_PROVIDER=wikimedia` สคริปต์จะค้นหาภาพจาก Wikimedia Commons ด้วยชื่อข่าว เรียกดูข้อมูล license/ผู้สร้าง และรับเฉพาะภาพที่มีขนาดอย่างน้อย `1000×525` หากค้นหาไม่สำเร็จหรือภาพเล็กเกินไป จะใช้พื้นหลังแบรนด์แทน
+
+หากต้องการใช้ Unsplash ให้สร้าง Access Key แล้วตั้งค่า:
+
+```env
+IMAGE_PROVIDER=unsplash
+UNSPLASH_ACCESS_KEY=your_access_key
+```
+
+ระบบจะเลือกภาพที่มีขนาดผ่านเกณฑ์และเพิ่มข้อมูลเครดิตใน caption อย่างไรก็ตาม ผู้ใช้ยังต้องตรวจสอบ license และสิทธิ์การใช้ภาพแต่ละรายการก่อนใช้งานเชิงพาณิชย์ หากต้องการไม่ดาวน์โหลดภาพจากภายนอก ให้ตั้ง `IMAGE_PROVIDER=none`
 
 ## การตั้งค่า Page Access Token
 

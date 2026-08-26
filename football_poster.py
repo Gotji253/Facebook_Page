@@ -172,11 +172,84 @@ def rank_news(items: list[NewsItem]) -> dict[str, dict[str, Any]]:
     }
 
 def write_post(item: NewsItem, score: dict[str, Any]) -> dict[str, Any]:
-    r = OpenAI().chat.completions.create(model=env("OPENAI_MODEL", "gpt-5-mini"), messages=[
-        {"role": "system", "content": "เขียนโพสต์ข่าวฟุตบอลภาษาไทยล้วน ห้ามใช้อีโมจิ hook; hook สั้นแรงไม่เกินประมาณ 40 ตัวอักษร; body 3-5 บรรทัด เรียบเรียงไม่แปลตรงตัว; cta ชวนคอมเมนต์หรือแชร์; hashtags ภาษาไทย 3-5 รายการ ส่ง JSON เท่านั้น"},
-        {"role": "user", "content": json.dumps({"title": item.title, "summary": item.summary, "source": item.source, "angle": score.get("main_angle", ""), "reason": score.get("reason", "")}, ensure_ascii=False)}],
-        response_format=schema("thai_post", {"hook": {"type": "string"}, "body": {"type": "string"}, "cta": {"type": "string"}, "hashtags": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 5}}, ["hook", "body", "cta", "hashtags"]), max_completion_tokens=1200)
-    post = json.loads(r.choices[0].message.content); post["hook"] = re.sub(r"[\U00010000-\U0010ffff]", "", post["hook"]).strip()[:100]; return post
+    post_input = {
+        "title": item.title[:300],
+        "summary": item.summary[:600],
+        "source": item.source,
+        "angle": score.get("main_angle", ""),
+        "reason": score.get("reason", ""),
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "เขียนโพสต์ข่าวฟุตบอลภาษาไทยล้วนและตอบเป็น JSON object เท่านั้น "
+                "ห้ามใช้ Markdown หรือ code fence และห้ามใช้อีโมจิใน hook "
+                "hook ต้องสั้นและแรงไม่เกินประมาณ 40 ตัวอักษร "
+                "body ต้องมี 3-5 บรรทัด เรียบเรียงไม่แปลตรงตัว "
+                "cta ชวนคอมเมนต์หรือแชร์ และ hashtags ภาษาไทย 3-5 รายการ "
+                "ห้ามใส่คำอธิบายนอก JSON"
+            ),
+        },
+        {"role": "user", "content": json.dumps(post_input, ensure_ascii=False)},
+    ]
+    post_schema = {
+        "hook": {"type": "string"},
+        "body": {"type": "string"},
+        "cta": {"type": "string"},
+        "hashtags": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 5},
+    }
+    request_args = {
+        "model": env("OPENAI_MODEL", "gpt-5-mini"),
+        "messages": messages,
+        "response_format": {"type": "json_object"},
+        "max_completion_tokens": 3000,
+    }
+    client = OpenAI()
+    try:
+        response = client.chat.completions.create(**request_args, reasoning_effort="minimal")
+    except Exception as exc:
+        LOG.warning("write_post minimal reasoning failed; retrying with low: %s", exc)
+        response = client.chat.completions.create(**request_args, reasoning_effort="low")
+
+    if not response.choices:
+        print("write_post: OpenAI ไม่ส่ง choices กลับมา")
+        print(response.model_dump_json(indent=2))
+        raise RuntimeError("OpenAI response มี choices ว่างใน write_post")
+
+    choice = response.choices[0]
+    message = choice.message
+    raw_response = message.content or ""
+    if not raw_response.strip():
+        print("write_post: OpenAI response ไม่มี content")
+        print("finish_reason:", choice.finish_reason)
+        print("refusal:", getattr(message, "refusal", None))
+        print("OpenAI response:")
+        print(response.model_dump_json(indent=2))
+        raise RuntimeError(
+            f"OpenAI ไม่ส่งข้อความสำหรับโพสต์กลับมา (finish_reason={choice.finish_reason})"
+        )
+
+    cleaned_response = raw_response.strip()
+    cleaned_response = re.sub(
+        r"^```(?:json)?\s*", "", cleaned_response, flags=re.IGNORECASE
+    )
+    cleaned_response = re.sub(r"\s*```$", "", cleaned_response).strip()
+    try:
+        post = json.loads(cleaned_response)
+    except json.JSONDecodeError as exc:
+        print("write_post: ไม่สามารถ parse JSON จาก OpenAI ได้")
+        print("OpenAI raw response:")
+        print(repr(raw_response))
+        print(f"JSONDecodeError: {exc}")
+        raise
+
+    required_fields = ("hook", "body", "cta", "hashtags")
+    missing = [field for field in required_fields if field not in post]
+    if missing:
+        raise ValueError(f"write_post JSON ขาดฟิลด์: {', '.join(missing)}")
+    post["hook"] = re.sub(r"[\U00010000-\U0010ffff]", "", str(post["hook"])).strip()[:100]
+    return post
 
 def load_font(path: str, size: int):
     try: return ImageFont.truetype(path, size=size)

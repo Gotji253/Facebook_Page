@@ -81,12 +81,53 @@ def schema(name: str, properties: dict[str, Any], required: list[str]) -> dict[s
     return {"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": {"type": "object", "properties": properties, "required": required, "additionalProperties": False}}}
 
 def rank_news(items: list[NewsItem]) -> dict[str, dict[str, Any]]:
-    payload = [asdict(x) for x in items]
-    r = OpenAI().chat.completions.create(model=env("OPENAI_MODEL", "gpt-5-mini"), messages=[
-        {"role": "system", "content": "คุณเป็นบรรณาธิการข่าวฟุตบอลสำหรับผู้อ่านชาวไทย ให้คะแนนข่าวแต่ละรายการเป็น JSON เท่านั้น พิจารณาทีม/นักเตะดัง ดราม่า ทรานส์เฟอร์ ผลแข่งสำคัญ และความสดใหม่ คะแนน 0-100 และ is_worthy=true เมื่อเหมาะโพสต์บนเพจข่าวฟุตบอลไทย"},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
-        response_format=schema("news_scores", {"items": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "score": {"type": "number"}, "is_worthy": {"type": "boolean"}, "main_angle": {"type": "string"}, "reason": {"type": "string"}}, "required": ["id", "score", "is_worthy", "main_angle", "reason"], "additionalProperties": False}}}, ["items"]), max_completion_tokens=2500)
-    return {str(x["id"]): x for x in json.loads(r.choices[0].message.content)["items"]}
+    payload = [asdict(item) for item in items]
+
+    response = OpenAI().chat.completions.create(
+        model=env("OPENAI_MODEL", "gpt-5-mini"),
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "คุณเป็นบรรณาธิการข่าวฟุตบอลสำหรับผู้อ่านชาวไทย "
+                    "ให้คะแนนข่าวทุกรายการและตอบกลับเป็น JSON object เท่านั้น "
+                    "ห้ามใช้ Markdown หรือ code fence เช่น ```json "
+                    "พิจารณาทีม/นักเตะดัง ดราม่า ทรานส์เฟอร์ ผลแข่งสำคัญ "
+                    "และความสดใหม่ คะแนนอยู่ระหว่าง 0-100 "
+                    "และ is_worthy=true เมื่อเหมาะสำหรับโพสต์บนเพจข่าวฟุตบอลไทย "
+                    "JSON ต้องมีโครงสร้าง {\"items\":[{\"id\":\"...\",\"score\":0,"
+                    "\"is_worthy\":true,\"main_angle\":\"...\",\"reason\":\"...\"}]}"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(payload, ensure_ascii=False),
+            },
+        ],
+        response_format={"type": "json_object"},
+        max_completion_tokens=2500,
+    )
+
+    raw_response = response.choices[0].message.content or ""
+    cleaned_response = raw_response.strip()
+    cleaned_response = re.sub(
+        r"^```(?:json)?\s*", "", cleaned_response, flags=re.IGNORECASE
+    )
+    cleaned_response = re.sub(r"\s*```$", "", cleaned_response).strip()
+
+    try:
+        parsed_response = json.loads(cleaned_response)
+    except json.JSONDecodeError as exc:
+        print("ไม่สามารถ parse JSON จาก OpenAI ได้")
+        print("OpenAI raw response:")
+        print(repr(raw_response))
+        print(f"JSONDecodeError: {exc}")
+        raise
+
+    return {
+        str(item["id"]): item
+        for item in parsed_response.get("items", [])
+    }
 
 def write_post(item: NewsItem, score: dict[str, Any]) -> dict[str, Any]:
     r = OpenAI().chat.completions.create(model=env("OPENAI_MODEL", "gpt-5-mini"), messages=[

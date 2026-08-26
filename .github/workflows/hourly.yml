@@ -1,0 +1,51 @@
+name: Hourly football poster
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore Thai font
+        env:
+          FONT_TTF_BASE64: ${{ secrets.FONT_TTF_BASE64 }}
+        run: |
+          mkdir -p fonts
+          printf '%s' "$FONT_TTF_BASE64" | base64 --decode > fonts/NotoSansThai-Regular.ttf
+
+      - name: Run poster
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5-mini
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          FONT_PATH: ${{ github.workspace }}/fonts/NotoSansThai-Regular.ttf
+          STATE_FILE: state.json
+          OUTPUT_IMAGE: output/latest.jpg
+        run: python football_poster.py
+
+      - name: Persist state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || git commit -m "chore: update posted-news state"
+          git push

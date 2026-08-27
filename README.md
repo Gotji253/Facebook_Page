@@ -46,7 +46,10 @@ URL RSS แก้ได้ด้วย `RSS_BBC_URL`, `RSS_ESPN_URL` และ `
 ```env
 IMAGE_PROVIDER=unsplash
 UNSPLASH_ACCESS_KEY=your_access_key
+UNSPLASH_FALLBACK_QUERIES=Tottenham football|Manchester City football|football stadium|soccer match
 ```
+
+ระบบจะลองคำค้นจาก headline ก่อน หากไม่พบภาพที่ผ่านตัวกรอง จะลองคำค้นใน `UNSPLASH_FALLBACK_QUERIES` ตามลำดับ โดยใช้เครื่องหมาย `|` คั่นแต่ละคำค้น
 
 สำหรับ Reddit ใช้ subreddit ค่าเริ่มต้น `soccer` หรือเปลี่ยนด้วย `REDDIT_SUBREDDIT` ระบบจะเลือกเฉพาะโพสต์ประเภท image ที่ไม่ติด NSFW และมี permalink สำหรับเครดิต แต่รูปจากผู้ใช้ Reddit ยังต้องตรวจสิทธิ์ก่อนใช้
 

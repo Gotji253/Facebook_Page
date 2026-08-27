@@ -203,16 +203,46 @@ def search_google(item: NewsItem) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def search_openverse(item: NewsItem) -> tuple[str, str, str]:
+    """Search openly licensed images without requiring a provider API key."""
+    try:
+        data = http_get(
+            "https://api.openverse.org/v1/images/",
+            params={
+                "q": image_query(item),
+                "page_size": 30,
+                "mature": "false",
+                "filter_dead": "true",
+            },
+            headers={"Accept": "application/json"},
+        ).json()
+        for result in data.get("results", []):
+            url = str(result.get("url") or result.get("thumbnail") or "")
+            width = int(result.get("width") or 0)
+            height = int(result.get("height") or 0)
+            title = str(result.get("title") or "")
+            if not image_is_acceptable(url, width, height, title):
+                continue
+            creator = str(result.get("creator") or "Openverse")
+            license_name = str(result.get("license") or "")
+            landing = str(result.get("foreign_landing_url") or "")
+            credit = f"ภาพ: {creator} ({license_name}) — {landing}".strip(" —")
+            return url, "Openverse", credit
+    except Exception as exc:
+        LOG.warning("Openverse image search failed: %s", exc)
+    return "", "", ""
+
+
 def find_related_image(item: NewsItem) -> tuple[str, str, str]:
-    provider = env("IMAGE_PROVIDER", "wikimedia").lower()
-    providers = [provider] if provider not in ("auto", "all") else ["wikimedia", "unsplash", "reddit", "bing", "google"]
-    searchers = {"wikimedia": search_wikimedia, "unsplash": search_unsplash, "reddit": search_reddit, "bing": search_bing, "google": search_google}
+    provider = env("IMAGE_PROVIDER", "auto").lower()
+    providers = [provider] if provider not in ("auto", "all") else ["openverse", "wikimedia", "unsplash", "reddit", "bing", "google"]
+    searchers = {"openverse": search_openverse, "wikimedia": search_wikimedia, "unsplash": search_unsplash, "reddit": search_reddit, "bing": search_bing, "google": search_google}
     for name in providers:
         searcher = searchers.get(name)
         if not searcher: continue
         url, source, credit = searcher(item)
         if url: return url, source, credit
-    LOG.warning("No approved image found; using brand gradient fallback")
+    LOG.warning("No approved image found after trying providers: %s; using brand gradient fallback", providers)
     return "", "", ""
 
 

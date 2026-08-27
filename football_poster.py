@@ -424,6 +424,7 @@ def make_image(hook: str, image_url: str, output: Path, font_path: str) -> None:
         try: base = Image.open(http_get(image_url, stream=True).raw).convert("RGB")
         except Exception as exc: LOG.warning("News image unavailable; using gradient fallback: %s", exc)
     if base is None:
+        LOG.warning("No source image found; generating brand fallback image")
         base = Image.new("RGB", (W, H)); px = base.load()
         for y in range(H):
             for x in range(W): px[x, y] = (10 + int(20*x/W), 28 + int(35*y/H), 70 + int(90*y/H))
@@ -441,9 +442,29 @@ def make_image(hook: str, image_url: str, output: Path, font_path: str) -> None:
     for line in lines:
         box = draw.textbbox((0, 0), line, font=font); x = (W-(box[2]-box[0]))//2
         draw.text((x+3, y+4), line, font=font, fill=(0,0,0,180), stroke_width=2, stroke_fill=(0,0,0,180)); draw.text((x, y), line, font=font, fill="white", stroke_width=1, stroke_fill=(0,0,0,220)); y += line_height
-    output.parent.mkdir(parents=True, exist_ok=True); canvas.convert("RGB").save(output, "JPEG", quality=92, optimize=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    canvas.convert("RGB").save(output, "JPEG", quality=92, optimize=True)
+    validate_image_file(output)
+
+def validate_image_file(image: Path) -> None:
+    """Fail closed unless a readable JPEG with the expected post dimensions exists."""
+    if not image.is_file() or image.stat().st_size == 0:
+        raise RuntimeError(f"Image file was not created: {image}")
+    try:
+        with Image.open(image) as checked:
+            checked.verify()
+        with Image.open(image) as checked:
+            if checked.format != "JPEG" or checked.size != (W, H):
+                raise RuntimeError(
+                    f"Invalid post image: format={checked.format}, size={checked.size}; "
+                    f"expected JPEG {W}x{H}"
+                )
+    except Exception as exc:
+        raise RuntimeError(f"Post image validation failed: {image}") from exc
 
 def publish(image: Path, text: str, page_id: str, token: str) -> dict[str, Any]:
+    # Never fall back to a text-only endpoint: every post must carry a validated image.
+    validate_image_file(image)
     version = env("FB_API_VERSION", "v23.0"); url = f"https://graph.facebook.com/{version}/{page_id}/photos"
     with image.open("rb") as f:
         r = requests.post(url, data={"access_token": token, "caption": text}, files={"source": (image.name, f, "image/jpeg")}, timeout=(10,60))
@@ -464,7 +485,7 @@ def main() -> int:
     item = max(candidates, key=lambda x: float(scores[x.id].get("score", 0)))
     try:
         item.image_url, item.image_source, item.image_credit = find_related_image(item)
-        post = write_post(item, scores[item.id]); output = Path(args.output); make_image(post["hook"], item.image_url, output, required_env("FONT_PATH")); tags = [str(x).strip() for x in post.get("hashtags", []) if str(x).strip()]; credit = item.image_credit; text = "\n\n".join([post["hook"].strip(), post["body"].strip(), post["cta"].strip(), " ".join(tags), credit]).strip()
+        post = write_post(item, scores[item.id]); output = Path(args.output); make_image(post["hook"], item.image_url, output, required_env("FONT_PATH")); validate_image_file(output); tags = [str(x).strip() for x in post.get("hashtags", []) if str(x).strip()]; credit = item.image_credit; text = "\n\n".join([post["hook"].strip(), post["body"].strip(), post["cta"].strip(), " ".join(tags), credit]).strip()
         LOG.info("Selected %s | score=%s | image=%s", item.title, scores[item.id].get("score"), output)
         if args.dry_run: print(json.dumps({"item": asdict(item), "score": scores[item.id], "post": post, "caption": text, "image": str(output)}, ensure_ascii=False, indent=2)); return 0
         result = publish(output, text, required_env("FB_PAGE_ID"), required_env("FB_PAGE_TOKEN")); LOG.info("Published to Facebook: %s", result); state["posted_ids"].append(item.id); save_state(state_path, state); return 0

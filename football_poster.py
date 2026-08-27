@@ -203,21 +203,41 @@ def search_google(item: NewsItem) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def image_url_variants(url: str) -> list[str]:
+    """Return common higher-resolution variants for publisher thumbnails."""
+    if not url:
+        return []
+    variants = [url]
+    patterns = (
+        (r"/240/", "/976/"),
+        (r"/320/", "/976/"),
+        (r"/480/", "/976/"),
+        (r"/640/", "/976/"),
+        (r"/768/", "/976/"),
+        (r"/1024/", "/1600/"),
+    )
+    for old, new in patterns:
+        candidate = re.sub(old, new, url, count=1)
+        if candidate not in variants:
+            variants.append(candidate)
+    return variants
+
+
 def search_rss_image(item: NewsItem) -> tuple[str, str, str]:
-    """Use the image supplied by the news feed when it is large and readable."""
-    if not item.image_url:
-        return "", "", ""
-    try:
-        response = http_get(item.image_url, stream=True)
-        with Image.open(response.raw) as image:
-            width, height = image.size
-        if not image_is_acceptable(item.image_url, width, height, item.title):
-            LOG.warning("RSS image rejected: size=%sx%s or disallowed URL: %s", width, height, item.image_url)
-            return "", "", ""
-        return item.image_url, f"{item.source} RSS", f"ภาพจาก {item.source}: {item.url}"
-    except Exception as exc:
-        LOG.warning("RSS image unavailable: %s", exc)
-        return "", "", ""
+    """Use the feed image, trying a publisher's higher-resolution URL variants."""
+    for candidate in image_url_variants(item.image_url):
+        try:
+            response = http_get(candidate, stream=True)
+            with Image.open(response.raw) as image:
+                width, height = image.size
+            if not image_is_acceptable(candidate, width, height, item.title):
+                LOG.warning("RSS image rejected: size=%sx%s or disallowed URL: %s", width, height, candidate)
+                continue
+            LOG.info("RSS image selected: %sx%s from %s", width, height, candidate)
+            return candidate, f"{item.source} RSS", f"ภาพจาก {item.source}: {item.url}"
+        except Exception as exc:
+            LOG.warning("RSS image variant unavailable (%s): %s", candidate, exc)
+    return "", "", ""
 
 
 def search_openverse(item: NewsItem) -> tuple[str, str, str]:
@@ -259,7 +279,7 @@ def find_related_image(item: NewsItem) -> tuple[str, str, str]:
         if not searcher: continue
         url, source, credit = searcher(item)
         if url: return url, source, credit
-    LOG.warning("No approved image found after trying providers: %s; using brand gradient fallback", providers)
+    LOG.error("No approved news image found after trying providers: %s; refusing to post", providers)
     return "", "", ""
 
 
@@ -469,12 +489,9 @@ def make_image(hook: str, image_url: str, output: Path, font_path: str) -> None:
     base = None
     if image_url:
         try: base = Image.open(http_get(image_url, stream=True).raw).convert("RGB")
-        except Exception as exc: LOG.warning("News image unavailable; using gradient fallback: %s", exc)
+        except Exception as exc: LOG.warning("News image unavailable; post image creation will fail: %s", exc)
     if base is None:
-        LOG.warning("No source image found; generating brand fallback image")
-        base = Image.new("RGB", (W, H)); px = base.load()
-        for y in range(H):
-            for x in range(W): px[x, y] = (10 + int(20*x/W), 28 + int(35*y/H), 70 + int(90*y/H))
+        raise RuntimeError("No real news image available; refusing to create a fallback post image")
     scale = max(W/base.width, H/base.height); base = base.resize((int(base.width*scale), int(base.height*scale)), Image.Resampling.LANCZOS)
     left, top = (base.width-W)//2, (base.height-H)//2; canvas = base.crop((left, top, left+W, top+H)).filter(ImageFilter.GaussianBlur(.2)).convert("RGBA")
     overlay = Image.new("RGBA", (W, H)); od = ImageDraw.Draw(overlay)
@@ -532,6 +549,8 @@ def main() -> int:
     item = max(candidates, key=lambda x: float(scores[x.id].get("score", 0)))
     try:
         item.image_url, item.image_source, item.image_credit = find_related_image(item)
+        if not item.image_url:
+            raise RuntimeError("No real news image found; post was skipped")
         post = write_post(item, scores[item.id]); output = Path(args.output); make_image(post["hook"], item.image_url, output, required_env("FONT_PATH")); validate_image_file(output); tags = [str(x).strip() for x in post.get("hashtags", []) if str(x).strip()]; credit = item.image_credit; text = "\n\n".join([post["hook"].strip(), post["body"].strip(), post["cta"].strip(), " ".join(tags), credit]).strip()
         LOG.info("Selected %s | score=%s | image=%s", item.title, scores[item.id].get("score"), output)
         if args.dry_run: print(json.dumps({"item": asdict(item), "score": scores[item.id], "post": post, "caption": text, "image": str(output)}, ensure_ascii=False, indent=2)); return 0

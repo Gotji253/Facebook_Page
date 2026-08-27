@@ -6,11 +6,12 @@ from football_poster import NewsItem, make_image, validate_image_file
 
 with TemporaryDirectory() as tmp:
     output = Path(tmp) / "post.jpg"
-    make_image("ทดสอบข่าวฟุตบอล", "", output, "missing-font.ttf")
-    validate_image_file(output)
-    with Image.open(output) as image:
-        assert image.format == "JPEG"
-        assert image.size == (1200, 630)
+    try:
+        make_image("ทดสอบข่าวฟุตบอล", "", output, "missing-font.ttf")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("missing real image must prevent post image creation")
     try:
         validate_image_file(Path(tmp) / "missing.jpg")
     except RuntimeError:

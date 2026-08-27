@@ -29,7 +29,7 @@ cp .env.example .env
 | `FB_API_VERSION` | ไม่ | ค่าเริ่มต้น `v23.0`; เปลี่ยนได้ตาม Graph API version ที่แอปใช้งาน |
 | `STATE_FILE` | ไม่ | ค่าเริ่มต้น `state.json` |
 | `OUTPUT_IMAGE` | ไม่ | ค่าเริ่มต้น `output/latest.jpg` |
-| `IMAGE_PROVIDER` | ไม่ | `auto`, `openverse`, `wikimedia`, `unsplash`, `reddit`, `bing` หรือ `google`; ใช้ `none` เพื่อใช้พื้นหลังแบรนด์ |
+| `IMAGE_PROVIDER` | ไม่ | `auto`, `rss`, `wikimedia`, `unsplash`, `reddit`, `bing` หรือ `google`; ใช้ `none` เพื่อใช้พื้นหลังแบรนด์ |
 | `UNSPLASH_ACCESS_KEY` | เฉพาะ Unsplash | Unsplash Access Key เมื่อเลือก `IMAGE_PROVIDER=unsplash` |
 | `IMAGE_MIN_WIDTH` / `IMAGE_MIN_HEIGHT` | ไม่ | ค่าเริ่มต้น `1000` / `525`; ภาพเล็กกว่านี้จะถูกข้าม |
 
@@ -37,11 +37,11 @@ URL RSS แก้ได้ด้วย `RSS_BBC_URL`, `RSS_ESPN_URL` และ `
 
 ## การค้นหาภาพที่เกี่ยวข้อง
 
-Openverse ถูกเพิ่มเป็นแหล่งค้นหาแรก เพราะรวบรวมรูปภาพจากแหล่งที่มีใบอนุญาตแบบเปิดและไม่ต้องใช้ API key ระบบยังคงแนบเครดิตจากข้อมูลผู้สร้าง ใบอนุญาต และหน้าแหล่งที่มาเมื่อข้อมูลดังกล่าวมีอยู่ ผู้ใช้ควรตรวจสอบเงื่อนไข license ของภาพก่อนใช้งานเชิงพาณิชย์
+ระบบจะพยายามใช้รูปภาพที่แนบมากับ RSS ของข่าวก่อน โดยตรวจสอบว่าเป็นรูปที่ดาวน์โหลดได้และมีขนาดผ่านเกณฑ์ จากนั้นจึงค้นหาจาก Wikimedia Commons, Unsplash, Reddit, Bing และ Google ตามลำดับ รูปจากข่าวจะใส่เครดิตกลับไปยังบทความต้นทาง และผู้ใช้ควรตรวจสอบสิทธิ์การใช้งานภาพก่อนเผยแพร่เชิงพาณิชย์
 
-โดยค่าเริ่มต้น `IMAGE_PROVIDER=auto` สคริปต์จะลองค้นหาตามลำดับ Openverse, Wikimedia Commons, Unsplash, Reddit, Bing และ Google เฉพาะ provider ที่มีการตั้งค่า key/ข้อมูลจำเป็นแล้ว โดยจะรับเฉพาะภาพที่มีขนาดอย่างน้อย `1000×525` และกรองคำที่สื่อว่าเป็น collage, montage, banner, poster, logo, screenshot หรือ thumbnail หากค้นหาภาพต้นฉบับไม่สำเร็จ จะสร้างภาพพื้นหลังแบรนด์ขนาด 1200×630 แทน ทั้งนี้ระบบจะโพสต์ได้ก็ต่อเมื่อไฟล์ JPEG ถูกสร้างและตรวจสอบแล้วเท่านั้น
+โดยค่าเริ่มต้น `IMAGE_PROVIDER=auto` สคริปต์จะลองใช้รูปจาก RSS ก่อน แล้วค้นหาตามลำดับ Wikimedia Commons, Unsplash, Reddit, Bing และ Google เฉพาะ provider ที่มีการตั้งค่า key/ข้อมูลจำเป็นแล้ว โดยจะรับเฉพาะภาพที่มีขนาดอย่างน้อย `1000×525` และกรองคำที่สื่อว่าเป็น collage, montage, banner, poster, logo, screenshot หรือ thumbnail หากค้นหาภาพต้นฉบับไม่สำเร็จ จะสร้างภาพพื้นหลังแบรนด์ขนาด 1200×630 แทน ทั้งนี้ระบบจะโพสต์ได้ก็ต่อเมื่อไฟล์ JPEG ถูกสร้างและตรวจสอบแล้วเท่านั้น
 
-เลือก provider เดียวได้ด้วย `IMAGE_PROVIDER=openverse`, `wikimedia`, `unsplash`, `reddit`, `bing` หรือ `google` หรือใช้ `IMAGE_PROVIDER=none` เพื่อไม่ดาวน์โหลดภาพภายนอก โดย `none` ยังสร้างภาพพื้นหลังแบรนด์และยังคงโพสต์เป็นรูปภาพ ไม่ใช่โพสต์ข้อความล้วน
+เลือก provider เดียวได้ด้วย `IMAGE_PROVIDER=rss`, `wikimedia`, `unsplash`, `reddit`, `bing` หรือ `google` หรือใช้ `IMAGE_PROVIDER=none` เพื่อไม่ดาวน์โหลดภาพภายนอก โดย `none` ยังสร้างภาพพื้นหลังแบรนด์และยังคงโพสต์เป็นรูปภาพ ไม่ใช่โพสต์ข้อความล้วน
 
 สำหรับ Unsplash ให้ตั้งค่า:
 

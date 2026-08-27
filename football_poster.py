@@ -203,6 +203,23 @@ def search_google(item: NewsItem) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def search_rss_image(item: NewsItem) -> tuple[str, str, str]:
+    """Use the image supplied by the news feed when it is large and readable."""
+    if not item.image_url:
+        return "", "", ""
+    try:
+        response = http_get(item.image_url, stream=True)
+        with Image.open(response.raw) as image:
+            width, height = image.size
+        if not image_is_acceptable(item.image_url, width, height, item.title):
+            LOG.warning("RSS image rejected: size=%sx%s or disallowed URL: %s", width, height, item.image_url)
+            return "", "", ""
+        return item.image_url, f"{item.source} RSS", f"ภาพจาก {item.source}: {item.url}"
+    except Exception as exc:
+        LOG.warning("RSS image unavailable: %s", exc)
+        return "", "", ""
+
+
 def search_openverse(item: NewsItem) -> tuple[str, str, str]:
     """Search openly licensed images without requiring a provider API key."""
     try:
@@ -235,8 +252,8 @@ def search_openverse(item: NewsItem) -> tuple[str, str, str]:
 
 def find_related_image(item: NewsItem) -> tuple[str, str, str]:
     provider = env("IMAGE_PROVIDER", "auto").lower()
-    providers = [provider] if provider not in ("auto", "all") else ["openverse", "wikimedia", "unsplash", "reddit", "bing", "google"]
-    searchers = {"openverse": search_openverse, "wikimedia": search_wikimedia, "unsplash": search_unsplash, "reddit": search_reddit, "bing": search_bing, "google": search_google}
+    providers = [provider] if provider not in ("auto", "all") else ["rss", "wikimedia", "unsplash", "reddit", "bing", "google"]
+    searchers = {"rss": search_rss_image, "openverse": search_openverse, "wikimedia": search_wikimedia, "unsplash": search_unsplash, "reddit": search_reddit, "bing": search_bing, "google": search_google}
     for name in providers:
         searcher = searchers.get(name)
         if not searcher: continue

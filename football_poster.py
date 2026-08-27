@@ -102,28 +102,36 @@ def search_unsplash(item: NewsItem) -> tuple[str, str, str]:
     if not key:
         LOG.warning("UNSPLASH_ACCESS_KEY is missing; skipping Unsplash")
         return "", "", ""
-    query = image_query(item)
-    try:
-        data = http_get(
-            "https://api.unsplash.com/search/photos",
-            params={"query": query, "per_page": 30, "content_filter": "high"},
-            headers={"Authorization": f"Client-ID {key}"},
-        ).json()
-        results = data.get("results", [])
-        LOG.info("Unsplash: query=%r results=%d", query, len(results))
-        for photo in results:
-            urls = photo.get("urls", {})
-            image_url = str(urls.get("raw") or urls.get("regular") or "")
-            description = str(photo.get("alt_description") or photo.get("description") or "")
-            if not image_is_acceptable(image_url, int(photo.get("width", 0)), int(photo.get("height", 0)), description):
-                continue
-            user = photo.get("user", {})
-            page_url = photo.get("links", {}).get("html", "")
-            credit = f"ภาพ: {user.get('name', 'Unsplash')} — {page_url}"
-            return image_url, "Unsplash", credit
-        LOG.warning("Unsplash returned no image passing size/content filters for query=%r", query)
-    except Exception as exc:
-        LOG.warning("Unsplash image search failed: %s", exc)
+
+    configured = env("UNSPLASH_FALLBACK_QUERIES", "Tottenham football|Manchester City football|football stadium|soccer match")
+    queries = [image_query(item)] + [q.strip() for q in configured.split("|") if q.strip()]
+    seen: set[str] = set()
+    for query in queries:
+        if query in seen:
+            continue
+        seen.add(query)
+        try:
+            data = http_get(
+                "https://api.unsplash.com/search/photos",
+                params={"query": query, "per_page": 30, "content_filter": "high"},
+                headers={"Authorization": f"Client-ID {key}"},
+            ).json()
+            results = data.get("results", [])
+            LOG.info("Unsplash: query=%r results=%d", query, len(results))
+            for photo in results:
+                urls = photo.get("urls", {})
+                image_url = str(urls.get("raw") or urls.get("regular") or "")
+                description = str(photo.get("alt_description") or photo.get("description") or "")
+                if not image_is_acceptable(image_url, int(photo.get("width", 0)), int(photo.get("height", 0)), description):
+                    continue
+                user = photo.get("user", {})
+                page_url = photo.get("links", {}).get("html", "")
+                credit = f"ภาพ: {user.get('name', 'Unsplash')} — {page_url}"
+                LOG.info("Unsplash image selected with query=%r", query)
+                return image_url, "Unsplash", credit
+            LOG.warning("Unsplash query returned no acceptable image: %r", query)
+        except Exception as exc:
+            LOG.warning("Unsplash query failed (%r): %s", query, exc)
     return "", "", ""
 
 

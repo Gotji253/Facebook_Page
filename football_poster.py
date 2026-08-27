@@ -102,20 +102,26 @@ def search_unsplash(item: NewsItem) -> tuple[str, str, str]:
     if not key:
         LOG.warning("UNSPLASH_ACCESS_KEY is missing; skipping Unsplash")
         return "", "", ""
+    query = image_query(item)
     try:
         data = http_get(
             "https://api.unsplash.com/search/photos",
-            params={"query": image_query(item), "per_page": 10, "content_filter": "high"},
+            params={"query": query, "per_page": 30, "content_filter": "high"},
             headers={"Authorization": f"Client-ID {key}"},
         ).json()
-        min_width = int(env("IMAGE_MIN_WIDTH", "1000"))
-        min_height = int(env("IMAGE_MIN_HEIGHT", "525"))
-        for photo in data.get("results", []):
-            if not image_is_acceptable(str(photo.get("urls", {}).get("regular", "")), int(photo.get("width", 0)), int(photo.get("height", 0)), str(photo.get("alt_description") or photo.get("description") or "")):
+        results = data.get("results", [])
+        LOG.info("Unsplash: query=%r results=%d", query, len(results))
+        for photo in results:
+            urls = photo.get("urls", {})
+            image_url = str(urls.get("raw") or urls.get("regular") or "")
+            description = str(photo.get("alt_description") or photo.get("description") or "")
+            if not image_is_acceptable(image_url, int(photo.get("width", 0)), int(photo.get("height", 0)), description):
                 continue
             user = photo.get("user", {})
-            credit = f"ภาพ: {user.get('name', 'Unsplash')} — {photo.get('links', {}).get('html', '')}"
-            return str(photo.get("urls", {}).get("regular", "")), "Unsplash", credit
+            page_url = photo.get("links", {}).get("html", "")
+            credit = f"ภาพ: {user.get('name', 'Unsplash')} — {page_url}"
+            return image_url, "Unsplash", credit
+        LOG.warning("Unsplash returned no image passing size/content filters for query=%r", query)
     except Exception as exc:
         LOG.warning("Unsplash image search failed: %s", exc)
     return "", "", ""

@@ -31,15 +31,15 @@ cp .env.example .env
 | `OUTPUT_IMAGE` | ไม่ | ค่าเริ่มต้น `output/latest.jpg` |
 | `IMAGE_PROVIDER` | ไม่ | `auto`, `rss`, `wikimedia`, `unsplash`, `reddit`, `bing` หรือ `google`; ใช้ `none` เพื่อใช้พื้นหลังแบรนด์ |
 | `UNSPLASH_ACCESS_KEY` | เฉพาะ Unsplash | Unsplash Access Key เมื่อเลือก `IMAGE_PROVIDER=unsplash` |
-| `IMAGE_MIN_WIDTH` / `IMAGE_MIN_HEIGHT` | ไม่ | ค่าเริ่มต้น `1000` / `525`; ภาพเล็กกว่านี้จะถูกข้าม |
+| `IMAGE_MIN_WIDTH` / `IMAGE_MIN_HEIGHT` | ไม่ | ค่าเริ่มต้น `900` / `500`; ภาพเล็กกว่านี้จะถูกข้าม |
 
 URL RSS แก้ได้ด้วย `RSS_BBC_URL`, `RSS_ESPN_URL` และ `RSS_GOAL_URL` หากผู้ให้บริการเปลี่ยน endpoint
 
 ## การค้นหาภาพที่เกี่ยวข้อง
 
-ระบบจะพยายามใช้รูปภาพที่แนบมากับ RSS ของข่าวก่อน โดยตรวจสอบว่าเป็นรูปที่ดาวน์โหลดได้และมีขนาดผ่านเกณฑ์ จากนั้นจึงค้นหาจาก Wikimedia Commons, Unsplash, Reddit, Bing และ Google ตามลำดับ รูปจากข่าวจะใส่เครดิตกลับไปยังบทความต้นทาง และผู้ใช้ควรตรวจสอบสิทธิ์การใช้งานภาพก่อนเผยแพร่เชิงพาณิชย์
+ระบบจะพยายามใช้รูปภาพที่แนบมากับ RSS ของข่าวก่อน โดยจะลองขยาย URL thumbnail ของ publisher เช่น BBC จาก 240 เป็น 976 ก่อนตรวจสอบว่าเป็นรูปที่ดาวน์โหลดได้และมีขนาดผ่านเกณฑ์ จากนั้นจึงค้นหาจาก Wikimedia Commons, Unsplash, Reddit, Bing และ Google ตามลำดับ รูปจากข่าวจะใส่เครดิตกลับไปยังบทความต้นทาง และผู้ใช้ควรตรวจสอบสิทธิ์การใช้งานภาพก่อนเผยแพร่เชิงพาณิชย์
 
-โดยค่าเริ่มต้น `IMAGE_PROVIDER=auto` สคริปต์จะลองใช้รูปจาก RSS ก่อน แล้วค้นหาตามลำดับ Wikimedia Commons, Unsplash, Reddit, Bing และ Google เฉพาะ provider ที่มีการตั้งค่า key/ข้อมูลจำเป็นแล้ว โดยจะรับเฉพาะภาพที่มีขนาดอย่างน้อย `1000×525` และกรองคำที่สื่อว่าเป็น collage, montage, banner, poster, logo, screenshot หรือ thumbnail ระบบจะไม่สร้าง brand fallback และจะไม่โพสต์จนกว่าจะได้รูปข่าวจริงที่ผ่านการตรวจสอบ
+โดยค่าเริ่มต้น `IMAGE_PROVIDER=auto` สคริปต์จะลองใช้รูปจาก RSS ก่อน แล้วค้นหาตามลำดับ Wikimedia Commons, Unsplash, Reddit, Bing และ Google เฉพาะ provider ที่มีการตั้งค่า key/ข้อมูลจำเป็นแล้ว โดยจะรับเฉพาะภาพที่มีขนาดอย่างน้อย `900×500` และกรองคำที่สื่อว่าเป็น collage, montage, banner, poster, logo, screenshot หรือ thumbnail ระบบจะไม่สร้าง brand fallback และจะไม่โพสต์จนกว่าจะได้รูปข่าวจริงที่ผ่านการตรวจสอบ
 
 เลือก provider เดียวได้ด้วย `IMAGE_PROVIDER=rss`, `wikimedia`, `unsplash`, `reddit`, `bing` หรือ `google` โดย `IMAGE_PROVIDER=none` จะไม่เหมาะกับโหมดบังคับรูปข่าวจริง และระบบจะหยุดโดยไม่โพสต์หากไม่มีรูปที่ผ่านการตรวจสอบ
 

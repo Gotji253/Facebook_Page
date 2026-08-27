@@ -81,8 +81,8 @@ def search_wikimedia(item: NewsItem) -> tuple[str, str, str]:
     try:
         data = http_get("https://commons.wikimedia.org/w/api.php", params=params).json()
         pages = data.get("query", {}).get("pages", {}).values()
-        min_width = int(env("IMAGE_MIN_WIDTH", "1000"))
-        min_height = int(env("IMAGE_MIN_HEIGHT", "525"))
+        min_width = int(env("IMAGE_MIN_WIDTH", "900"))
+        min_height = int(env("IMAGE_MIN_HEIGHT", "500"))
         for page in pages:
             info = (page.get("imageinfo") or [{}])[0]
             if not image_is_acceptable(str(info.get("url") or info.get("thumburl") or ""), int(info.get("width", 0)), int(info.get("height", 0)), str(page.get("title", ""))):
@@ -139,7 +139,7 @@ IMAGE_BAD_TERMS = ("collage", "montage", "banner", "poster", "logo", "screenshot
 
 
 def image_is_acceptable(url: str, width: int, height: int, title: str = "") -> bool:
-    if not url or width < int(env("IMAGE_MIN_WIDTH", "1000")) or height < int(env("IMAGE_MIN_HEIGHT", "525")):
+    if not url or width < int(env("IMAGE_MIN_WIDTH", "900")) or height < int(env("IMAGE_MIN_HEIGHT", "500")):
         return False
     haystack = f"{url} {title}".lower()
     return not any(term in haystack for term in IMAGE_BAD_TERMS)

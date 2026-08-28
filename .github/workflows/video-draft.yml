@@ -1,0 +1,72 @@
+name: Football video draft
+
+on:
+  schedule:
+    # GitHub Actions uses UTC: 07:00, 10:00, 12:00, 15:00, 18:00, 20:00 Asia/Bangkok.
+    - cron: "0 0,3,5,8,11,13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: football-video-draft
+  cancel-in-progress: false
+
+jobs:
+  create-draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check ffmpeg
+        run: ffmpeg -version | head -1
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate required secrets
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: test -n "$OPENAI_API_KEY" || { echo "Missing OPENAI_API_KEY secret"; exit 1; }
+
+      - name: Create video draft
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5-mini
+          FONT_PATH: ${{ github.workspace }}/fonts/NotoSansThai-Regular.ttf
+          VIDEO_DRAFT_DIR: video_drafts
+          VIDEO_STATE_FILE: video_draft_state.json
+        run: python video_draft.py
+
+      - name: Upload draft artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: football-video-draft-${{ github.run_id }}
+          path: |
+            video_drafts/*.mp4
+            video_drafts/*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Persist draft state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f video_draft_state.json ]; then
+            git add -f video_draft_state.json
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: update video draft state"
+              git push
+            else
+              echo "video_draft_state.json is unchanged"
+            fi
+          fi

@@ -1,6 +1,8 @@
 .env
 state.json
 output/
+video_drafts/
+video_draft_state.json
 __pycache__/
 *.py[cod]
 .venv/

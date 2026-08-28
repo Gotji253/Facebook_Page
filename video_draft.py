@@ -60,7 +60,7 @@ def generate_joke(item: NewsItem) -> dict[str, object]:
     prompt = {
         "title": item.title[:300],
         "summary": item.summary[:1200],
-        "instruction": "เขียนมุกล้อเลียนฟุตบอลแบบสุภาพ ไม่ใส่ข่าวปลอม ไม่กล่าวหาบุคคล และไม่ใช้คำหยาบ สำหรับ motion comic ภาษาไทย 45 วินาที แบ่งเป็น 3 ฉาก ฉากละประมาณ 15 วินาที",
+        "instruction": "เขียนมุกล้อเลียนฟุตบอลแบบสุภาพ ไม่ใส่ข่าวปลอม ไม่กล่าวหาบุคคล และไม่ใช้คำหยาบ สำหรับ motion comic ภาษาไทย 45 วินาที แบ่งเป็น 3 ฉาก ฉากละประมาณ 15 วินาที โดยต้องตอบกลับเป็น valid JSON เท่านั้น มีคีย์ scenes และ caption",
     }
     response = client.chat.completions.create(
         model=env("OPENAI_MODEL", "gpt-5-mini"),

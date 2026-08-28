@@ -114,19 +114,21 @@ python football_poster.py
 
 ในแต่ละรอบ สคริปต์จะดึง RSS ทั้งหมดแบบ best-effort, ข้ามฟีดที่ล้มเหลว, ส่งข่าวที่ยังไม่อยู่ใน state ให้ AI ให้คะแนนใน **หนึ่ง API call**, เลือกข่าวคะแนนสูงสุด, ค้นหารูปจริงจาก provider chain และลองขยาย URL thumbnail ของ publisher ก่อนเรียก AI เพื่อเขียนโพสต์ หากไม่มีรูปที่ผ่านเกณฑ์ ระบบจะคืนข้อผิดพลาดและหยุดโดยไม่เรียก Facebook APIและไม่บันทึกข่าวลง state
 
-## cron ทุก 2 ชั่วโมง
+## ตารางโพสต์อัตโนมัติ
 
-เพิ่มใน `crontab -e` โดยเปลี่ยน path ให้ตรงกับเครื่องจริง:
+สำหรับ GitHub Actions ระบบจะโพสต์ตามเวลาไทย (Asia/Bangkok, UTC+7) ที่ 07:00, 10:00, 12:00, 15:00, 18:00 และ 20:00 ของทุกวัน โดย cron ของ GitHub Actions ใช้เวลา UTC จึงกำหนดเป็น `0 0,3,5,8,11,13 * * *`
+
+หากใช้ Linux cron แทน GitHub Actions และเครื่องตั้ง timezone เป็น Asia/Bangkok ให้เพิ่มใน `crontab -e` ดังนี้:
 
 ```cron
-0 */2 * * * flock -n /tmp/facebook-page-football.lock sh -c 'cd /opt/Facebook_Page && . .venv/bin/activate && set -a && . ./.env && set +a && python football_poster.py' >> /opt/Facebook_Page/poster.log 2>&1
+0 7,10,12,15,18,20 * * * flock -n /tmp/facebook-page-football.lock sh -c 'cd /opt/Facebook_Page && . .venv/bin/activate && set -a && . ./.env && set +a && python football_poster.py' >> /opt/Facebook_Page/poster.log 2>&1
 ```
 
 `flock` ช่วยป้องกันการรันซ้อนกันซึ่งอาจทำให้เกิดโพสต์ซ้ำ และ `state.json` ต้องอยู่บน disk ที่คงอยู่หลังรีสตาร์ท
 
 ## GitHub Actions
 
-ไฟล์ `.github/workflows/hourly.yml` เป็นตัวอย่างสำหรับ runner รายชั่วโมง โดยต้องเพิ่ม repository secrets ชื่อ `OPENAI_API_KEY`, `FB_PAGE_ID`, `FB_PAGE_TOKEN` และ `FONT_TTF_BASE64` ก่อนใช้งาน Workflow จะ restore และ commit `state.json` กลับเข้า repository; สำหรับ production ควรใช้ persistent storage ที่ปลอดภัยกว่าเพื่อไม่ให้ token หรือ state ผูกกับ runner ชั่วคราว
+ไฟล์ `.github/workflows/hourly.yml` เป็น workflow สำหรับ runner ตามเวลาที่กำหนด 6 รอบต่อวัน โดยต้องเพิ่ม repository secrets ชื่อ `OPENAI_API_KEY`, `FB_PAGE_ID`, `FB_PAGE_TOKEN` และ `FONT_TTF_BASE64` ก่อนใช้งาน Workflow จะ restore และ commit `state.json` กลับเข้า repository; สำหรับ production ควรใช้ persistent storage ที่ปลอดภัยกว่าเพื่อไม่ให้ token หรือ state ผูกกับ runner ชั่วคราว
 
 ## ความเสถียรและการตรวจสอบเพิ่มเติม
 

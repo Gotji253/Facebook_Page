@@ -14,7 +14,12 @@ from openai import OpenAI
 
 LOG = logging.getLogger("football_poster")
 USER_AGENT = "FacebookPageFootballPoster/1.0"
-DEFAULT_FEEDS = {"BBC Sport": "https://feeds.bbci.co.uk/sport/football/rss.xml", "ESPN": "https://www.espn.com/espn/rss/soccer/news", "Goal.com": "https://www.goal.com/feeds/en/news"}
+DEFAULT_FEEDS = {
+    "BBC Sport": "https://feeds.bbci.co.uk/sport/football/rss.xml",
+    "ESPN": "https://www.espn.com/espn/rss/soccer/news",
+    "The Guardian": "https://www.theguardian.com/football/rss",
+    "FourFourTwo": "https://www.fourfourtwo.com/rss",
+}
 W, H = 1200, 630
 
 @dataclass
@@ -573,7 +578,15 @@ def publish(image: Path, text: str, page_id: str, token: str) -> dict[str, Any]:
 def main() -> int:
     p = argparse.ArgumentParser(); p.add_argument("--dry-run", action="store_true"); p.add_argument("--state-file", default=env("STATE_FILE", "state.json")); p.add_argument("--output", default=env("OUTPUT_IMAGE", "output/latest.jpg")); args = p.parse_args()
     logging.basicConfig(level=getattr(logging, env("LOG_LEVEL", "INFO").upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
-    feeds = {"BBC Sport": env("RSS_BBC_URL", DEFAULT_FEEDS["BBC Sport"]), "ESPN": env("RSS_ESPN_URL", DEFAULT_FEEDS["ESPN"]), "Goal.com": env("RSS_GOAL_URL", DEFAULT_FEEDS["Goal.com"])}
+    feeds = {
+        "BBC Sport": env("RSS_BBC_URL", DEFAULT_FEEDS["BBC Sport"]),
+        "ESPN": env("RSS_ESPN_URL", DEFAULT_FEEDS["ESPN"]),
+        "The Guardian": env("RSS_GUARDIAN_URL", DEFAULT_FEEDS["The Guardian"]),
+        "FourFourTwo": env("RSS_FOURFOURTWO_URL", DEFAULT_FEEDS["FourFourTwo"]),
+    }
+    # Goal.com no longer exposes the old public endpoint; allow an explicit override only.
+    if env("RSS_GOAL_URL"):
+        feeds["Goal.com"] = env("RSS_GOAL_URL")
     state_path = Path(args.state_file); state = load_state(state_path); posted = set(state["posted_ids"])
     items = [x for source, url in feeds.items() for x in fetch_feed(source, url) if x.id not in posted]
     if not items: LOG.info("No new news to post"); return 0

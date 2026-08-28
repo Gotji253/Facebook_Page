@@ -72,17 +72,24 @@ def generate_joke(item: NewsItem) -> dict[str, object]:
     )
     data = json.loads(response.choices[0].message.content or "{}")
     scenes = data.get("scenes")
-    if not isinstance(scenes, list) or len(scenes) != 3:
-        raise ValueError("AI ต้องส่ง scenes จำนวน 3 ฉาก")
+    if isinstance(scenes, dict):
+        scenes = list(scenes.values())
     clean_scenes = []
-    for scene in scenes:
-        if not isinstance(scene, dict):
-            raise ValueError("รูปแบบ scene ไม่ถูกต้อง")
-        clean_scenes.append({
-            "title": str(scene.get("title", "ฉากข่าวฟุตบอล"))[:80],
-            "line": str(scene.get("line", "มุกฟุตบอลประจำวันนี้"))[:180],
-            "narration": str(scene.get("narration", "ติดตามข่าวฟุตบอลแบบขำ ๆ กันครับ"))[:300],
-        })
+    if isinstance(scenes, list):
+        for scene in scenes[:3]:
+            if isinstance(scene, dict):
+                clean_scenes.append({
+                    "title": str(scene.get("title", "ฉากข่าวฟุตบอล"))[:80],
+                    "line": str(scene.get("line", "มุกฟุตบอลประจำวันนี้"))[:180],
+                    "narration": str(scene.get("narration", "ติดตามข่าวฟุตบอลแบบขำ ๆ กันครับ"))[:300],
+                })
+    if len(clean_scenes) != 3:
+        LOG.warning("AI returned invalid scenes; using safe deterministic joke fallback")
+        clean_scenes = [
+            {"title": "ข่าวมาแล้ว", "line": f"{item.title[:80]}", "narration": "ข่าวนี้จริงจัง แต่ขอเล่าแบบขำ ๆ นะครับ"},
+            {"title": "มุมแฟนบอล", "line": "ตลาดนักเตะทำเอาแฟนบอลต้องเปิดเครื่องคิดเลข", "narration": "ค่าตัวขยับที กระเป๋าสตางค์แฟนบอลก็สั่นตาม"},
+            {"title": "บทสรุป", "line": "ติดตามตอนต่อไป ก่อนข่าวใหม่จะมาแซงคิว", "narration": "นี่คือการ์ตูนล้อเลียนจากข่าว โปรดตรวจสอบข่าวต้นทางก่อนแชร์"},
+        ]
     caption = str(data.get("caption", f"มุกฟุตบอลประจำวัน: {item.title}"))[:1800]
     return {"scenes": clean_scenes, "caption": caption}
 

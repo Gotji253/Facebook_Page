@@ -59,6 +59,7 @@ jobs:
           path: |
             video_drafts/*.mp4
             video_drafts/*.json
+            video_drafts/scenes_*/*.png
           if-no-files-found: error
           retention-days: 14
 

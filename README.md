@@ -125,6 +125,12 @@ python football_poster.py
 
 ไฟล์ `.github/workflows/hourly.yml` เป็นตัวอย่างสำหรับ runner รายชั่วโมง โดยต้องเพิ่ม repository secrets ชื่อ `OPENAI_API_KEY`, `FB_PAGE_ID`, `FB_PAGE_TOKEN` และ `FONT_TTF_BASE64` ก่อนใช้งาน Workflow จะ restore และ commit `state.json` กลับเข้า repository; สำหรับ production ควรใช้ persistent storage ที่ปลอดภัยกว่าเพื่อไม่ให้ token หรือ state ผูกกับ runner ชั่วคราว
 
+## ความเสถียรและการตรวจสอบเพิ่มเติม
+
+ระบบจะ retry คำขอ HTTP ที่ตอบ 429 หรือ 5xx สูงสุด 3 ครั้งด้วย exponential backoff และจะใช้ canonical URL เป็นตัวระบุข่าวเพื่อลดการโพสต์ซ้ำข้ามแหล่งข่าว ผลลัพธ์จาก AI จะถูกตรวจชนิดข้อมูลและจำกัดช่วงคะแนน ความยาวข้อความ และจำนวน hashtags ก่อนนำไปใช้
+
+GitHub Actions มี concurrency group เพื่อป้องกัน schedule กับ manual dispatch รันพร้อมกัน และมี preflight ตรวจ `OPENAI_API_KEY`, `FB_PAGE_ID` และ `FB_PAGE_TOKEN` ก่อนเริ่มดึงข่าว หากไม่พบ secret ที่จำเป็น workflow จะหยุดพร้อมข้อความแจ้งสาเหตุ
+
 ## Error handling
 
 ฟีดที่ดาวน์โหลดไม่ได้ รูปต้นฉบับที่ใช้ไม่ได้ และข้อผิดพลาดจาก API จะถูกบันทึกใน log แทนการทำให้ขั้นตอน RSS ทั้งหมดล้มเหลว แต่หากไม่พบรูปข่าวจริงหรือไฟล์รูปภาพไม่ใช่ JPEG ขนาด 1200×630 สคริปต์จะหยุดก่อนโพสต์และคืน exit code ไม่เป็นศูนย์ จะไม่มีการใช้พื้นหลังสีน้ำเงินแทนรูปข่าว หาก AI หรือการโพสต์ล้มเหลว สคริปต์จะไม่ทำเครื่องหมายข่าวเป็นโพสต์แล้วก่อน Facebook ยืนยันสำเร็จ

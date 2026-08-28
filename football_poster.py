@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Standalone hourly football-news poster for a Facebook Page."""
 from __future__ import annotations
-import argparse, hashlib, html, json, logging, os, re, sys, tempfile
+import argparse, hashlib, html, json, logging, os, re, sys, tempfile, time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +29,21 @@ def required_env(name: str) -> str:
 
 def http_get(url: str, **kwargs: Any) -> requests.Response:
     headers = {"User-Agent": USER_AGENT, **kwargs.pop("headers", {})}
-    r = requests.get(url, headers=headers, timeout=(10, 30), **kwargs); r.raise_for_status(); return r
+    last_error = None
+    for attempt in range(3):
+        try:
+            response = requests.get(url, headers=headers, timeout=(10, 30), **kwargs)
+            if response.status_code == 429 or response.status_code >= 500:
+                response.raise_for_status()
+            response.raise_for_status()
+            return response
+        except requests.RequestException as exc:
+            last_error = exc
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status not in (429, 500, 502, 503, 504) or attempt == 2:
+                raise
+            time.sleep(2 ** attempt)
+    raise last_error or RuntimeError(f"HTTP request failed: {url}")
 
 def first_url(value: Any) -> str:
     if isinstance(value, str): return value
@@ -54,8 +68,10 @@ def fetch_feed(source: str, feed_url: str) -> list[NewsItem]:
             if not title: continue
             summary = re.sub(r"<[^>]+>", " ", str(entry.get("summary", entry.get("description", ""))))
             summary = re.sub(r"\s+", " ", summary).strip()
-            raw_id = str(entry.get("id") or entry.get("guid") or entry.get("link") or title)
-            ident = hashlib.sha256(f"{source}:{raw_id}".encode()).hexdigest()
+            raw_url = str(entry.get("link") or "").strip()
+            canonical_url = re.sub(r"#.*$", "", raw_url).rstrip("/").lower()
+            raw_id = canonical_url or str(entry.get("id") or entry.get("guid") or title).strip().lower()
+            ident = hashlib.sha256(raw_id.encode()).hexdigest()
             result.append(NewsItem(ident, source, title, summary[:1200], str(entry.get("link", "")), image_from_entry(entry, feed_url), str(entry.get("published", entry.get("updated", "")))))
         LOG.info("%s: found %d entries", source, len(result)); return result
     except Exception as exc:
@@ -388,10 +404,19 @@ def rank_news(items: list[NewsItem]) -> dict[str, dict[str, Any]]:
         print(f"JSONDecodeError: {exc}")
         raise
 
-    return {
-        str(item["id"]): item
-        for item in parsed_response.get("items", [])
-    }
+    results = {}
+    for item in parsed_response.get("items", []):
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        try:
+            item["score"] = max(0, min(100, float(item.get("score", 0))))
+            item["is_worthy"] = bool(item.get("is_worthy", False))
+            item["main_angle"] = str(item.get("main_angle", ""))[:500]
+            item["reason"] = str(item.get("reason", ""))[:1000]
+            results[str(item["id"])] = item
+        except (TypeError, ValueError):
+            LOG.warning("Ignoring invalid ranking item from OpenAI: %r", item)
+    return results
 
 def write_post(item: NewsItem, score: dict[str, Any]) -> dict[str, Any]:
     post_input = {
@@ -470,7 +495,17 @@ def write_post(item: NewsItem, score: dict[str, Any]) -> dict[str, Any]:
     missing = [field for field in required_fields if field not in post]
     if missing:
         raise ValueError(f"write_post JSON ขาดฟิลด์: {', '.join(missing)}")
-    post["hook"] = re.sub(r"[\U00010000-\U0010ffff]", "", str(post["hook"])).strip()[:100]
+    for field in ("hook", "body", "cta"):
+        if not isinstance(post[field], str) or not post[field].strip():
+            raise ValueError(f"write_post field ไม่ถูกต้อง: {field}")
+    if not isinstance(post["hashtags"], list) or not 3 <= len(post["hashtags"]) <= 5:
+        raise ValueError("write_post hashtags ต้องเป็น array จำนวน 3-5 รายการ")
+    post["hook"] = re.sub(r"[\U00010000-\U0010ffff]", "", post["hook"]).strip()[:100]
+    post["body"] = post["body"].strip()[:3000]
+    post["cta"] = post["cta"].strip()[:500]
+    post["hashtags"] = [str(tag).strip()[:80] for tag in post["hashtags"] if str(tag).strip()][:5]
+    if len(post["hashtags"]) < 3:
+        raise ValueError("write_post hashtags มีรายการที่ใช้งานได้ไม่ถึง 3 รายการ")
     return post
 
 def load_font(path: str, size: int):

@@ -525,7 +525,54 @@ def wrap_text(draw, text: str, font, max_width: int) -> list[str]:
         else: current = candidate
     return lines + ([current] if current else []) or [text]
 
-def make_image(hook: str, image_url: str, output: Path, font_path: str) -> None:
+def choose_template(item: NewsItem) -> str:
+    requested = env("IMAGE_TEMPLATE", "auto").lower()
+    if requested in {"news", "stats", "match"}:
+        return requested
+    text = f"{item.title} {item.summary}".lower()
+    if any(term in text for term in ("สถิติ", "record", "เปอร์เซ็นต์", "ประตู", "คะแนน", "แต้ม", "ยิง")):
+        return "stats"
+    if any(term in text for term in (" vs ", " v ", "พบ", "ดวล", "ปะทะ", "แข่ง", "นัด", "match", "ชิง")):
+        return "match"
+    return "news"
+
+
+def _fit_font(draw, text: str, font_path: str, max_size: int, max_width: int, max_lines: int = 3):
+    size = max_size
+    while size >= 36:
+        font = load_font(font_path, size)
+        lines = wrap_text(draw, text, font, max_width)
+        if len(lines) <= max_lines:
+            return font, lines
+        size -= 4
+    font = load_font(font_path, 36)
+    return font, wrap_text(draw, text, font, max_width)
+
+
+def _draw_centered(draw, lines: list[str], font, y: int, fill="white"):
+    line_height = getattr(font, "size", 42) + 14
+    for line in lines:
+        box = draw.textbbox((0, 0), line, font=font); x = (W-(box[2]-box[0]))//2
+        draw.text((x+3, y+4), line, font=font, fill=(0,0,0,190), stroke_width=2, stroke_fill=(0,0,0,190))
+        draw.text((x, y), line, font=font, fill=fill, stroke_width=1, stroke_fill=(0,0,0,220))
+        y += line_height
+
+
+def _summary_facts(item: NewsItem) -> list[str]:
+    sentences = re.split(r"(?<=[.!?])\s+|(?<=ฯ)\s+", item.summary)
+    facts = [re.sub(r"<[^>]+>", "", sentence).strip() for sentence in sentences if re.search(r"\d", sentence)]
+    return [fact[:80] for fact in facts[:3]] or ["ติดตามรายละเอียดและบทวิเคราะห์ล่าสุด"]
+
+
+def _match_teams(title: str) -> tuple[str, str]:
+    clean = re.sub(r"\s+", " ", title).strip()
+    parts = re.split(r"\s+(?:vs?\.?|พบ|ดวล|ปะทะ|เจอ)\s+", clean, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2:
+        return parts[0][:32], parts[1][:32]
+    return "ทีมเหย้า", "ทีมเยือน"
+
+
+def make_image(hook: str, image_url: str, output: Path, font_path: str, template: str = "news", item: NewsItem | None = None) -> None:
     base = None
     if image_url:
         try: base = Image.open(http_get(image_url, stream=True).raw).convert("RGB")
@@ -534,18 +581,33 @@ def make_image(hook: str, image_url: str, output: Path, font_path: str) -> None:
         raise RuntimeError("No real news image available; refusing to create a fallback post image")
     scale = max(W/base.width, H/base.height); base = base.resize((int(base.width*scale), int(base.height*scale)), Image.Resampling.LANCZOS)
     left, top = (base.width-W)//2, (base.height-H)//2; canvas = base.crop((left, top, left+W, top+H)).filter(ImageFilter.GaussianBlur(.2)).convert("RGBA")
-    overlay = Image.new("RGBA", (W, H)); od = ImageDraw.Draw(overlay)
-    for y in range(H//2, H): od.line((0, y, W, y), fill=(0, 0, 0, int(215*(y-H//2)/(H//2))))
-    canvas = Image.alpha_composite(canvas, overlay); draw = ImageDraw.Draw(canvas)
-    size = 92
-    while size >= 42:
-        font = load_font(font_path, size); lines = wrap_text(draw, hook, font, 980)
-        if len(lines) <= 3: break
-        size -= 4
-    line_height = size + 16; y = H - line_height*len(lines) - 70
-    for line in lines:
-        box = draw.textbbox((0, 0), line, font=font); x = (W-(box[2]-box[0]))//2
-        draw.text((x+3, y+4), line, font=font, fill=(0,0,0,180), stroke_width=2, stroke_fill=(0,0,0,180)); draw.text((x, y), line, font=font, fill="white", stroke_width=1, stroke_fill=(0,0,0,220)); y += line_height
+    draw = ImageDraw.Draw(canvas)
+    if template == "stats":
+        canvas = Image.alpha_composite(canvas, Image.new("RGBA", (W, H), (5, 16, 38, 220))); draw = ImageDraw.Draw(canvas)
+        draw.rectangle((0, 0, 18, H), fill=(29, 185, 84, 255)); draw.rectangle((W-18, 0, W, H), fill=(29, 185, 84, 255))
+        draw.text((70, 55), "สรุปสถิติ", font=load_font(font_path, 42), fill=(120, 255, 180))
+        facts = _summary_facts(item) if item else ["ติดตามรายละเอียดและบทวิเคราะห์ล่าสุด"]
+        fact_font = load_font(font_path, 40); y = 150
+        for index, fact in enumerate(facts, 1):
+            draw.ellipse((72, y+8, 108, y+44), fill=(29, 185, 84, 255)); draw.text((82, y+2), str(index), font=load_font(font_path, 28), fill="white")
+            lines = wrap_text(draw, fact, fact_font, 970); _draw_centered(draw, lines, fact_font, y); y += max(82, len(lines)*56 + 22)
+        title_font, title_lines = _fit_font(draw, hook, font_path, 54, 1000, 2); _draw_centered(draw, title_lines, title_font, 510, fill=(255, 232, 120))
+    elif template == "match":
+        canvas = Image.alpha_composite(canvas, Image.new("RGBA", (W, H), (8, 20, 48, 100))); draw = ImageDraw.Draw(canvas)
+        draw.rectangle((0, 0, W, 112), fill=(8, 20, 48, 225)); draw.text((70, 32), "MATCHDAY", font=load_font(font_path, 54), fill=(255, 211, 72))
+        title_font, title_lines = _fit_font(draw, item.title if item else hook, font_path, 58, 1000, 2); _draw_centered(draw, title_lines, title_font, 155)
+        draw.rounded_rectangle((110, 330, 500, 490), radius=24, fill=(255,255,255,225)); draw.rounded_rectangle((700, 330, 1090, 490), radius=24, fill=(255,255,255,225))
+        home, away = _match_teams(item.title if item else hook)
+        home_font, home_lines = _fit_font(draw, home, font_path, 42, 330, 2); away_font, away_lines = _fit_font(draw, away, font_path, 42, 330, 2)
+        _draw_centered(draw, home_lines, home_font, 365); _draw_centered(draw, away_lines, away_font, 365)
+        _draw_centered(draw, ["VS"], load_font(font_path, 58), 515, fill=(255, 211, 72))
+        hook_font, hook_lines = _fit_font(draw, hook, font_path, 50, 980, 2); _draw_centered(draw, hook_lines, hook_font, 520)
+    else:
+        overlay = Image.new("RGBA", (W, H)); od = ImageDraw.Draw(overlay)
+        for y in range(H//2, H): od.line((0, y, W, y), fill=(0, 0, 0, int(215*(y-H//2)/(H//2))))
+        canvas = Image.alpha_composite(canvas, overlay); draw = ImageDraw.Draw(canvas)
+        font, lines = _fit_font(draw, hook, font_path, 92, 980, 3); line_height = getattr(font, "size", 92) + 16
+        _draw_centered(draw, lines, font, H - line_height*len(lines) - 70)
     output.parent.mkdir(parents=True, exist_ok=True)
     canvas.convert("RGB").save(output, "JPEG", quality=92, optimize=True)
     validate_image_file(output)
@@ -599,8 +661,8 @@ def main() -> int:
         item.image_url, item.image_source, item.image_credit = find_related_image(item)
         if not item.image_url:
             raise RuntimeError("No real news image found; post was skipped")
-        post = write_post(item, scores[item.id]); output = Path(args.output); make_image(post["hook"], item.image_url, output, required_env("FONT_PATH")); validate_image_file(output); tags = [str(x).strip() for x in post.get("hashtags", []) if str(x).strip()]; credit = item.image_credit; text = "\n\n".join([post["hook"].strip(), post["body"].strip(), post["cta"].strip(), " ".join(tags), credit]).strip()
-        LOG.info("Selected %s | score=%s | image=%s", item.title, scores[item.id].get("score"), output)
+        post = write_post(item, scores[item.id]); output = Path(args.output); template = choose_template(item); make_image(post["hook"], item.image_url, output, required_env("FONT_PATH"), template, item); validate_image_file(output); tags = [str(x).strip() for x in post.get("hashtags", []) if str(x).strip()]; credit = item.image_credit; text = "\n\n".join([post["hook"].strip(), post["body"].strip(), post["cta"].strip(), " ".join(tags), credit]).strip()
+        LOG.info("Selected %s | score=%s | template=%s | image=%s", item.title, scores[item.id].get("score"), template, output)
         if args.dry_run: print(json.dumps({"item": asdict(item), "score": scores[item.id], "post": post, "caption": text, "image": str(output)}, ensure_ascii=False, indent=2)); return 0
         result = publish(output, text, required_env("FB_PAGE_ID"), required_env("FB_PAGE_TOKEN")); LOG.info("Published to Facebook: %s", result); state["posted_ids"].append(item.id); save_state(state_path, state); return 0
     except Exception as exc: LOG.exception("Post preparation/publication failed: %s", exc); return 1

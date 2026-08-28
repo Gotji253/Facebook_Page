@@ -30,12 +30,15 @@ cp .env.example .env
 | `STATE_FILE` | ไม่ | ค่าเริ่มต้น `state.json` |
 | `OUTPUT_IMAGE` | ไม่ | ค่าเริ่มต้น `output/latest.jpg` |
 | `IMAGE_PROVIDER` | ไม่ | `auto`, `rss`, `wikimedia`, `unsplash`, `reddit`, `bing` หรือ `google`; ใช้ `none` เพื่อใช้พื้นหลังแบรนด์ |
+| `IMAGE_TEMPLATE` | ไม่ | `auto`, `news`, `stats` หรือ `match`; ค่าเริ่มต้น `auto` จะเลือกตามคำสำคัญของข่าว |
 | `UNSPLASH_ACCESS_KEY` | เฉพาะ Unsplash | Unsplash Access Key เมื่อเลือก `IMAGE_PROVIDER=unsplash` |
 | `IMAGE_MIN_WIDTH` / `IMAGE_MIN_HEIGHT` | ไม่ | ค่าเริ่มต้น `900` / `500`; ภาพเล็กกว่านี้จะถูกข้าม |
 
 ค่าเริ่มต้นของแหล่งข่าวคือ BBC Sport, ESPN, The Guardian และ FourFourTwo โดยแก้ URL ได้ด้วย `RSS_BBC_URL`, `RSS_ESPN_URL`, `RSS_GUARDIAN_URL` และ `RSS_FOURFOURTWO_URL` หากผู้ให้บริการเปลี่ยน endpoint ส่วน Goal.com ถูกถอดจากค่าเริ่มต้นเพราะ endpoint สาธารณะเดิมตอบ 404 และจะเปิดใช้เฉพาะเมื่อกำหนด `RSS_GOAL_URL` ที่ตรวจสอบแล้วเอง
 
 ## การค้นหาภาพที่เกี่ยวข้อง
+
+ระบบมี template ภาพ 3 แบบ ได้แก่ `news` สำหรับข่าวทั่วไป, `stats` สำหรับข่าวที่มีตัวเลข/สถิติ และ `match` สำหรับข่าวการแข่งขัน โดย `IMAGE_TEMPLATE=auto` จะเลือกแบบให้เองจากหัวข้อและสรุปข่าว ทั้งสามแบบยังใช้รูปข่าวจริงเป็นพื้นหลังและส่งออกเป็น JPEG 1200×630
 
 ระบบจะพยายามใช้รูปภาพที่แนบมากับ RSS ของข่าวจาก BBC Sport, ESPN, The Guardian หรือ FourFourTwo ก่อน โดยจะลองขยาย URL thumbnail ของ publisher เช่น BBC จาก 240 เป็น 976 ก่อนตรวจสอบว่าเป็นรูปที่ดาวน์โหลดได้และมีขนาดผ่านเกณฑ์ จากนั้นจึงค้นหาจาก Wikimedia Commons, Unsplash, Reddit, Bing และ Google ตามลำดับ รูปจากข่าวจะใส่เครดิตกลับไปยังบทความต้นทาง และผู้ใช้ควรตรวจสอบสิทธิ์การใช้งานภาพก่อนเผยแพร่เชิงพาณิชย์
 

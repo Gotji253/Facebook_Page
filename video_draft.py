@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import io
 import json
 import logging
 import os
@@ -17,7 +16,7 @@ import requests
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 from openai import OpenAI
 
-from football_poster import DEFAULT_FEEDS, NewsItem, fetch_feed, find_related_image, http_get, load_state, required_env, save_state
+from football_poster import DEFAULT_FEEDS, NewsItem, fetch_feed, find_related_image, load_state, required_env, save_state
 
 LOG = logging.getLogger("video_draft")
 W, H = 1080, 1920
@@ -162,6 +161,28 @@ def prepare_scene(image_path: Path) -> Image.Image:
     return image.filter(ImageFilter.EDGE_ENHANCE)
 
 
+def _fit_text(draw, text: str, font_path: str, max_size: int, min_size: int, max_width: int, max_lines: int):
+    size = max_size
+    while size >= min_size:
+        font = load_font(font_path, size)
+        lines = wrap(draw, text, font, max_width)
+        if len(lines) <= max_lines:
+            return font, lines, max(int(size * 1.22), size + 16)
+        size -= 4
+    font = load_font(font_path, min_size)
+    return font, wrap(draw, text, font, max_width)[:max_lines], min_size + 16
+
+
+def _draw_centered_lines(draw, lines: list[str], font, y: int, fill, line_height: int) -> int:
+    for line in lines:
+        box = draw.textbbox((0, 0), line, font=font)
+        x = (W - (box[2] - box[0])) // 2
+        draw.text((x + 3, y + 4), line, font=font, fill=(0, 0, 0, 200), stroke_width=4, stroke_fill=(0, 0, 0, 210))
+        draw.text((x, y), line, font=font, fill=fill, stroke_width=3, stroke_fill=(0, 0, 0, 230))
+        y += line_height
+    return y
+
+
 def draw_scene(base: Image.Image, scene: dict[str, str], scene_index: int, font_path: str) -> Image.Image:
     frame = base.copy().convert("RGBA")
     zoom = 1.0 + scene_index * 0.025
@@ -171,25 +192,32 @@ def draw_scene(base: Image.Image, scene: dict[str, str], scene_index: int, font_
     frame = frame.crop((left, top, left + crop_w, top + crop_h)).resize((W, H), Image.Resampling.LANCZOS)
     frame = Image.blend(frame, Image.new("RGBA", (W, H), (8, 22, 52, 90)), 0.25)
     draw = ImageDraw.Draw(frame)
-    draw.rectangle((0, 0, W, 180), fill=(7, 18, 45, 225))
-    draw.rounded_rectangle((42, H - 570, W - 42, H - 118), radius=28, fill=(7, 18, 45, 224), outline=(255, 214, 88, 220), width=3)
-    label_font = load_font(font_path, 40)
-    title_font = load_font(font_path, 62)
-    line_font = load_font(font_path, 48)
-    draw.text((58, 48), f"รอบรู้ : INSIGHT  |  ฉาก {scene_index + 1}/{SCENE_COUNT}", font=label_font, fill=(255, 214, 88))
-    y = 230
-    for line in wrap(draw, scene["title"], title_font, 930)[:2]:
-        box = draw.textbbox((0, 0), line, font=title_font)
-        x = (W - (box[2] - box[0])) // 2
-        draw.text((x, y), line, font=title_font, fill="white", stroke_width=2, stroke_fill=(0, 0, 0, 220))
-        y += 80
-    y = H - 510
-    for line in wrap(draw, scene["line"], line_font, 900)[:4]:
-        box = draw.textbbox((0, 0), line, font=line_font)
-        x = (W - (box[2] - box[0])) // 2
-        draw.text((x, y), line, font=line_font, fill=(255, 240, 160), stroke_width=2, stroke_fill=(0, 0, 0, 230))
-        y += 64
-    draw.text((58, H - 82), "การ์ตูนล้อเลียนเพื่อความบันเทิง | ตรวจสอบข่าวต้นทางก่อนแชร์", font=load_font(font_path, 27), fill=(225, 235, 248))
+
+    hook_font, hook_lines, hook_gap = _fit_text(draw, scene["title"], font_path, 96, 64, 960, 3)
+    summary_font, summary_lines, summary_gap = _fit_text(draw, scene["line"], font_path, 78, 52, 920, 4)
+    hook_h = max(1, len(hook_lines)) * hook_gap
+    summary_h = max(1, len(summary_lines)) * summary_gap
+    block_h = hook_h + 36 + summary_h
+    box_top = max(220, (H - block_h) // 2 - 40)
+    box_bottom = min(H - 130, box_top + block_h + 80)
+    draw.rounded_rectangle((36, box_top - 28, W - 36, box_bottom), radius=32, fill=(7, 18, 45, 214), outline=(255, 214, 88, 220), width=3)
+
+    brand_font = load_font(font_path, 36)
+    brand = "รอบรู้ : INSIGHT"
+    brand_box = draw.textbbox((0, 0), brand, font=brand_font)
+    brand_x = (W - (brand_box[2] - brand_box[0])) // 2
+    draw.text((brand_x, box_top - 8), brand, font=brand_font, fill=(255, 214, 88))
+
+    y = box_top + 48
+    y = _draw_centered_lines(draw, hook_lines, hook_font, y, "white", hook_gap)
+    y += 18
+    _draw_centered_lines(draw, summary_lines, summary_font, y, (255, 240, 160), summary_gap)
+
+    footer = "การ์ตูนล้อเลียนเพื่อความบันเทิง | ตรวจสอบข่าวต้นทางก่อนแชร์"
+    footer_font = load_font(font_path, 28)
+    footer_box = draw.textbbox((0, 0), footer, font=footer_font)
+    footer_x = (W - (footer_box[2] - footer_box[0])) // 2
+    draw.text((footer_x, H - 78), footer, font=footer_font, fill=(225, 235, 248))
     return frame.convert("RGB")
 
 

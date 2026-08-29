@@ -65,7 +65,7 @@ jobs:
           VIDEO_DRAFT_DIR: video_drafts
           VIDEO_STATE_FILE: video_draft_state.json
           POST_TO_FACEBOOK: "1"
-        run: python video_draft.py
+        run: python video_post.py
 
       - name: Upload draft artifact
         if: always()

@@ -21,6 +21,7 @@ LOG = logging.getLogger("video_post")
 THAI_RE = re.compile(r"[\u0E00-\u0E7F]")
 IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp)(?:$|\?)", re.I)
 MAX_PHOTO_BYTES = 4_000_000
+SCENE_LABELS = {"สรุปสั้น", "สรุปข่าว", "สรุปข่าวสั้น"}
 
 
 def has_thai(text: str) -> bool:
@@ -31,7 +32,7 @@ def first_sentence(text: str, limit: int = 90) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if not text:
         return ""
-    parts = re.split(r"(?<=[។.!\n])\s+", text, maxsplit=1)
+    parts = re.split(r"(?<=[ฮ.!\n])\s+", text, maxsplit=1)
     return parts[0].strip()[:limit]
 
 
@@ -53,9 +54,9 @@ def fallback_storyboard(item):
 def finalize_storyboard(item, data: dict) -> dict:
     hook = thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง")[:80]
     body = thai_or(str(data.get("body") or ""), "รายละเอียดอยู่ในข่าวต้นทาง ติดตามให้ครบก่อนแชร์")[:400]
-    recap = first_sentence(body, 90) or "สรุปสั้นจากข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
+    recap = first_sentence(body, 90) or "รายละเอียดอยู่ในข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
     if recap == hook:
-        recap = "สรุปสั้นจากข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
+        recap = "รายละเอียดอยู่ในข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     style = str(data.get("music_style", "comedy")).strip().lower()
     if style not in vd.MUSIC_STYLES:
@@ -63,7 +64,7 @@ def finalize_storyboard(item, data: dict) -> dict:
     return {
         "scenes": [
             {"title": "เกิดอะไรขึ้น", "line": hook[:90], "narration": hook[:140], "image_prompt": "real football photo 1"},
-            {"title": "สรุปสั้น", "line": recap[:90], "narration": body[:140], "image_prompt": "real football photo 2"},
+            {"title": recap[:90], "line": "", "narration": body[:140], "image_prompt": "real football photo 2"},
         ],
         "caption": thai_or(str(data.get("caption") or ""), hook)[:500],
         "hook": hook,
@@ -98,9 +99,46 @@ def generate_storyboard(item):
     if not isinstance(data, dict):
         return fallback_storyboard(item)
     board = finalize_storyboard(item, data)
-    if not has_thai(board["hook"]) or not has_thai(board["scenes"][1]["line"]):
+    if not has_thai(board["hook"]) or not has_thai(board["scenes"][1]["title"]):
         return fallback_storyboard(item)
     return board
+
+
+def wrap(draw, text: str, font, width: int):
+    text = " ".join(str(text).split())
+    if not text:
+        return []
+    return vd.wrap.__wrapped__(draw, text, font, width) if hasattr(vd.wrap, "__wrapped__") else _wrap_chars(draw, text, font, width)
+
+
+def _wrap_chars(draw, text: str, font, width: int):
+    lines, current = [], ""
+    for char in text:
+        candidate = current + char
+        if draw.textbbox((0, 0), candidate, font=font)[2] <= width:
+            current = candidate
+            continue
+        if current.strip():
+            lines.append(current.strip())
+            current = "" if char == " " else char
+            continue
+        lines.append(char)
+        current = ""
+    if current.strip():
+        lines.append(current.strip())
+    return lines or [text]
+
+
+_orig_draw = vd.draw_scene
+
+
+def draw_scene(base, scene, scene_index, font_path):
+    scene = dict(scene or {})
+    title = str(scene.get("title") or "").strip()
+    if title in SCENE_LABELS:
+        scene["title"] = str(scene.get("line") or "")
+        scene["line"] = ""
+    return _orig_draw(base, scene, scene_index, font_path)
 
 
 def _photo_key(url: str) -> str:
@@ -140,7 +178,6 @@ def search_wikipedia_thumbs(query: str):
     )
     pages = (response.json().get("query") or {}).get("pages") or {}
     for page in pages.values():
-        thumb = ((page.get("thumbnail") or {}).get("source") or "").replace("/thumb/", "/")
         source = (page.get("thumbnail") or {}).get("source") or ""
         if source:
             yield source, "Wikipedia", page.get("title", query)
@@ -226,6 +263,8 @@ def generate_scene_images(item, storyboard, output_dir: Path):
 vd.fallback_storyboard = fallback_storyboard
 vd.generate_storyboard = generate_storyboard
 vd.generate_scene_images = generate_scene_images
+vd.draw_scene = draw_scene
+vd.wrap = _wrap_chars
 
 
 if __name__ == "__main__":

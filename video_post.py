@@ -74,24 +74,35 @@ def story_tokens(text: str) -> set[str]:
     return {token.lower() for token in found if token not in STOP_TOKENS}
 
 
+def thai_clusters(text: str) -> list[str]:
+    clusters: list[str] = []
+    for char in text:
+        if clusters and THAI_MARK.fullmatch(char):
+            clusters[-1] += char
+        else:
+            clusters.append(char)
+    return clusters
+
+
 def complete_phrase(text: str, limit: int) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if not text:
         return ""
     if len(text) <= limit:
-        cleaned = text
-    else:
-        cut = text[:limit]
-        rest = text[limit:]
-        if rest and not cut.endswith(" ") and not rest.startswith(" "):
-            extra = re.match(r"\S{1,12}", rest)
-            if extra and len(cut) + extra.end() <= limit + 12:
-                cleaned = (cut + extra.group(0)).rstrip()
-            else:
-                cleaned = cut.rsplit(" ", 1)[0] if " " in cut else cut.rstrip()
-        else:
-            cleaned = cut.rsplit(" ", 1)[0] if " " in cut.rstrip() else cut.rstrip()
-    return cleaned.rstrip(" ,;:-/")
+        return text.rstrip(" ,;:-/")
+    acc = ""
+    for cluster in thai_clusters(text):
+        if acc and len(acc) + len(cluster) > limit:
+            break
+        acc += cluster
+    rest = text[len(acc):]
+    if rest and not acc.endswith(" ") and not rest[0].isspace():
+        extra = re.match(r"\S{1,20}", rest)
+        if extra:
+            acc += extra.group(0)
+    elif " " in acc and not acc.endswith(" "):
+        acc = acc.rsplit(" ", 1)[0]
+    return acc.rstrip(" ,;:-/")
 
 
 def finish_last_word(short: str, long: str, limit: int) -> str:
@@ -214,6 +225,8 @@ def looks_truncated(text: str) -> bool:
     if text[-1] in ".!ฮ?…":
         return False
     last = text.split()[-1] if text.split() else text
+    if re.fullmatch(r"\d{1,2}[-–]\d{1,2}", last):
+        return False
     if last in HANGING_TAILS:
         return True
     if 1 <= len(re.sub(r"\s+", "", last)) <= 3 and text[-1] not in ".!ฮ?…":
@@ -278,20 +291,20 @@ def fallback_storyboard(item):
     return board
 
 
-def finalize_storyboard(item, data: dict, limit: int = 64) -> dict:
+def finalize_storyboard(item, data: dict, limit: int = 110) -> dict:
     raw_hook = thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง")
     raw_body = thai_or(str(data.get("body") or ""), raw_hook)
     body = one_story(raw_body) or raw_hook
     scores = source_scores(item)
     hook = finish_phrase(complete_phrase(raw_hook, limit), body, limit)
     hook = with_score(hook, scores, limit)
-    recap = first_sentence(body, 80) or complete_phrase(body, 80)
-    recap = finish_phrase(recap, body, 80)
+    recap = first_sentence(body, 140) or complete_phrase(body, 140)
+    recap = finish_phrase(recap, body, 140)
     if recap == hook or len(re.sub(r"\s+", "", recap)) < 18:
-        extra = complete_phrase(body, 80)
-        recap = extra if extra != hook else complete_phrase(hook + " " + body, 80)
-        recap = finish_phrase(recap, body, 80)
-    recap = with_score(recap, scores, 80)
+        extra = complete_phrase(body, 140)
+        recap = extra if extra != hook else complete_phrase(hook + " " + body, 140)
+        recap = finish_phrase(recap, body, 140)
+    recap = with_score(recap, scores, 140)
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     style = str(data.get("music_style", "comedy")).strip().lower()
     if style not in vd.MUSIC_STYLES:
@@ -344,7 +357,7 @@ def generate_storyboard(item):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    board = finalize_storyboard(item, data, 64)
+    board = finalize_storyboard(item, data, 110)
     if not has_thai(board["hook"]) or not has_thai(board["scenes"][1]["title"]):
         board = fallback_storyboard(item)
         data = board.get("_source_data") or data
@@ -353,7 +366,7 @@ def generate_storyboard(item):
         LOG.warning("Clip text failed first review, rewriting same-story recap: %s", review["errors"])
         data = dict(data or board.get("_source_data") or {})
         data["body"] = data.get("hook") or board.get("hook")
-        board = finalize_storyboard(item, data, 64)
+        board = finalize_storyboard(item, data, 110)
         review = review_on_screen_text(item, board)
     board["clip_review"] = review
     vd._clip_review = review

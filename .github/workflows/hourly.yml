@@ -2,7 +2,7 @@ name: Scheduled football poster
 
 on:
   schedule:
-    - cron: "0 0,3,5,8,11,13 * * *"
+    - cron: "0 5,8,13 * * *"
   workflow_dispatch:
 
 permissions:

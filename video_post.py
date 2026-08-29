@@ -265,10 +265,6 @@ def generate_storyboard(item):
     return board
 
 
-def _wrap_chars(draw, text: str, font, width: int):
-    return vd.wrap(draw, text, font, width)
-
-
 _orig_draw = vd.draw_scene
 _orig_fetch = vd.fetch_feed
 _orig_validate = vd.validate_news
@@ -475,7 +471,6 @@ vd.fallback_storyboard = fallback_storyboard
 vd.generate_storyboard = generate_storyboard
 vd.generate_scene_images = generate_scene_images
 vd.draw_scene = draw_scene
-vd.wrap = _wrap_chars
 vd.fetch_feed = fetch_feed
 vd.validate_news = validate_news
 vd.publish_video = publish_video

@@ -188,13 +188,14 @@ def fallback_storyboard(item):
     return board
 
 
-def finalize_storyboard(item, data: dict, limit: int = 56) -> dict:
+def finalize_storyboard(item, data: dict, limit: int = 64) -> dict:
     hook = complete_phrase(thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง"), limit)
     raw_body = thai_or(str(data.get("body") or ""), hook)
     body = one_story(raw_body) or hook
-    recap = first_sentence(body, min(limit, 36)) or complete_phrase(hook, 36)
-    if not same_story("เกิดอะไรขึ้น " + hook, recap):
-        recap = complete_phrase(hook, 36)
+    recap = first_sentence(body, 80) or complete_phrase(body, 80)
+    if recap == hook or len(re.sub(r"\s+", "", recap)) < 18:
+        extra = complete_phrase(body, 80)
+        recap = extra if extra != hook else complete_phrase(hook + " " + body, 80)
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     style = str(data.get("music_style", "comedy")).strip().lower()
     if style not in vd.MUSIC_STYLES:
@@ -202,7 +203,7 @@ def finalize_storyboard(item, data: dict, limit: int = 56) -> dict:
     return {
         "scenes": [
             {"title": "เกิดอะไรขึ้น", "line": hook, "narration": hook[:140], "image_prompt": "real football photo 1"},
-            {"title": recap, "line": "", "narration": body[:140], "image_prompt": "real football photo 2"},
+            {"title": recap, "line": "", "narration": body[:180], "image_prompt": "real football photo 2"},
         ],
         "caption": thai_or(str(data.get("caption") or ""), hook)[:500],
         "hook": hook,
@@ -233,7 +234,7 @@ def generate_storyboard(item):
             "ตอบ JSON สั้น มี hook, body, cta, hashtags, music_style. "
             "hook และ body ต้องเป็นภาษาไทยล้วน และต้องเล่าเรื่องเดียวกันเท่านั้น. "
             "ห้ามยัดข่าวซุบซิบหรือข่าวหลายเรื่องใน body. "
-            "hook ไม่เกิน 12 คำ body 1 ประโยคสั้นของเรื่องเดียวกัน. "
+            "hook 1 ประโยค 16-22 คำ body 1-2 ประโยคของเรื่องเดียวกัน ต้องมีเหตุผลสั้นๆ. "
             "music_style เป็น hype, triumph, tense, comedy หรือ calm"
         ),
     }
@@ -247,7 +248,7 @@ def generate_storyboard(item):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    board = finalize_storyboard(item, data, 42)
+    board = finalize_storyboard(item, data, 64)
     if not has_thai(board["hook"]) or not has_thai(board["scenes"][1]["title"]):
         board = fallback_storyboard(item)
         data = board.get("_source_data") or data
@@ -256,7 +257,7 @@ def generate_storyboard(item):
         LOG.warning("Clip text failed first review, rewriting same-story recap: %s", review["errors"])
         data = dict(data or board.get("_source_data") or {})
         data["body"] = data.get("hook") or board.get("hook")
-        board = finalize_storyboard(item, data, 42)
+        board = finalize_storyboard(item, data, 64)
         review = review_on_screen_text(item, board)
     board["clip_review"] = review
     vd._clip_review = review

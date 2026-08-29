@@ -22,10 +22,34 @@ THAI_RE = re.compile(r"[\u0E00-\u0E7F]")
 IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp)(?:$|\?)", re.I)
 MAX_PHOTO_BYTES = 4_000_000
 SCENE_LABELS = {"สรุปสั้น", "สรุปข่าว", "สรุปข่าวสั้น"}
+SKIP_NEWS = (
+    "quiz", "quizzes", "puzzle", "crossword", "podcast", "newsletter",
+    "fantasy football", "predictor", "prediction game", "daily quiz",
+    "flex your football", "test your", "brain teaser", "trivia",
+    "live text", "as it happened",
+)
+KEEP_NEWS = (
+    "football", "soccer", "premier league", "la liga", "bundesliga", "serie a",
+    "ligue 1", "champions league", "europa league", "world cup", "euros",
+    "transfer", "midfielder", "striker", "goalkeeper", "winger", "manager",
+    "sacked", "signed", "hat-trick", "match", "goal", "fixture",
+    "ฟุตบอล", "บอล", "พรีเมียร์", "ชามเปียนส์", "ย้ายทีม",
+)
 
 
 def has_thai(text: str) -> bool:
     return bool(THAI_RE.search(text or ""))
+
+
+def news_text(item) -> str:
+    return f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')} {getattr(item, 'url', '')}".lower()
+
+
+def is_football_news(item) -> bool:
+    text = news_text(item)
+    if any(word in text for word in SKIP_NEWS):
+        return False
+    return any(word in text for word in KEEP_NEWS)
 
 
 def first_sentence(text: str, limit: int = 90) -> str:
@@ -77,6 +101,8 @@ def finalize_storyboard(item, data: dict) -> dict:
 
 def generate_storyboard(item):
     vd.validate_news(item)
+    if not is_football_news(item):
+        raise ValueError("ข่าวนี้ไม่ใช่ข่าวฟุตบอล")
     request = {
         "title": item.title[:180],
         "summary": item.summary[:280],
@@ -104,14 +130,10 @@ def generate_storyboard(item):
     return board
 
 
-def wrap(draw, text: str, font, width: int):
+def _wrap_chars(draw, text: str, font, width: int):
     text = " ".join(str(text).split())
     if not text:
         return []
-    return vd.wrap.__wrapped__(draw, text, font, width) if hasattr(vd.wrap, "__wrapped__") else _wrap_chars(draw, text, font, width)
-
-
-def _wrap_chars(draw, text: str, font, width: int):
     lines, current = [], ""
     for char in text:
         candidate = current + char
@@ -130,6 +152,8 @@ def _wrap_chars(draw, text: str, font, width: int):
 
 
 _orig_draw = vd.draw_scene
+_orig_fetch = vd.fetch_feed
+_orig_validate = vd.validate_news
 
 
 def draw_scene(base, scene, scene_index, font_path):
@@ -139,6 +163,22 @@ def draw_scene(base, scene, scene_index, font_path):
         scene["title"] = str(scene.get("line") or "")
         scene["line"] = ""
     return _orig_draw(base, scene, scene_index, font_path)
+
+
+def fetch_feed(source, url):
+    kept = []
+    for item in _orig_fetch(source, url):
+        if is_football_news(item):
+            kept.append(item)
+        else:
+            LOG.info("Skip non-football item: %s", getattr(item, "title", "")[:80])
+    return kept
+
+
+def validate_news(item) -> None:
+    _orig_validate(item)
+    if not is_football_news(item):
+        raise ValueError("ข้ามควิซ พอดคาสต์ หรือคอนเทนต์ทั่วไป ใช้เฉพาะข่าวฟุตบอล")
 
 
 def _photo_key(url: str) -> str:
@@ -179,7 +219,8 @@ def search_wikipedia_thumbs(query: str):
     pages = (response.json().get("query") or {}).get("pages") or {}
     for page in pages.values():
         source = (page.get("thumbnail") or {}).get("source") or ""
-        if source:
+        title = str(page.get("title") or "").lower()
+        if source and any(word in title for word in ("football", "soccer", "f.c", "fc ", "club", "stadium")):
             yield source, "Wikipedia", page.get("title", query)
 
 
@@ -197,9 +238,9 @@ def collect_real_photos(item) -> list[dict]:
     queries = [
         " ".join(words[:4]) + " football",
         " ".join(words[:2]) + " football club",
-        "Bundesliga football stadium",
         "Premier League football match",
-        "association football player",
+        "Champions League football",
+        "association football player portrait",
     ]
     for query in queries:
         if len(found) >= 8:
@@ -265,6 +306,8 @@ vd.generate_storyboard = generate_storyboard
 vd.generate_scene_images = generate_scene_images
 vd.draw_scene = draw_scene
 vd.wrap = _wrap_chars
+vd.fetch_feed = fetch_feed
+vd.validate_news = validate_news
 
 
 if __name__ == "__main__":

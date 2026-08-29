@@ -5,9 +5,12 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import os
+import struct
 import subprocess
 import tempfile
+import wave
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +35,13 @@ BOX_PAD_X = 48
 BOX_PAD_Y = 26
 BOX_TOP_MIN = 1080
 BOX_BOTTOM_MAX = 1810
+MUSIC_STYLES = {
+    "hype": {"bpm": 128, "minor": False, "label": "ฮึกเหิม จังหวะตลาดนักเตะ", "volume": 0.16},
+    "triumph": {"bpm": 118, "minor": False, "label": "ฉลองชัย ยิงประตู", "volume": 0.17},
+    "tense": {"bpm": 96, "minor": True, "label": "ดราม่า กดดัน", "volume": 0.14},
+    "comedy": {"bpm": 112, "minor": False, "label": "ล้อเลียน สนุกเบาสมอง", "volume": 0.15},
+    "calm": {"bpm": 84, "minor": True, "label": "วิเคราะห์ นุ่มฟังง่าย", "volume": 0.12},
+}
 
 
 def env(name: str, default: str = "") -> str:
@@ -158,6 +168,113 @@ def generate_storyboard(item: NewsItem) -> dict[str, object]:
         LOG.warning("Storyboard had invalid scene count; using safe fallback storyboard")
         return fallback_storyboard(item)
     return {"scenes": clean, "caption": str(data.get("caption", f"การ์ตูนล้อเลียนข่าวฟุตบอล: {item.title}"))[:1800]}
+
+
+def storyboard_text(item: NewsItem, storyboard: dict[str, object]) -> str:
+    scenes = storyboard.get("scenes") or []
+    bits = [item.title, item.summary, str(storyboard.get("caption", ""))]
+    for scene in scenes:
+        if isinstance(scene, dict):
+            bits.extend([str(scene.get("title", "")), str(scene.get("line", "")), str(scene.get("narration", ""))])
+    return " ".join(bits).lower()
+
+
+def rule_music_style(text: str) -> str:
+    if any(word in text for word in ("goal", "hat-trick", "winner", "ประตู", "ชนะ", "แชมป์", "ถ้วย")):
+        return "triumph"
+    if any(word in text for word in ("transfer", "sign", "deal", "ย้าย", "ตลาด", "ค่าตัว")):
+        return "hype"
+    if any(word in text for word in ("sack", "ban", "injury", "crisis", "ดราม่า", "โดนแบน", "บาดเจ็บ", "ไล่")):
+        return "tense"
+    if any(word in text for word in ("analysis", "tactics", "preview", "วิเคราะห์", "แผน")):
+        return "calm"
+    return "comedy"
+
+
+def analyze_music(item: NewsItem, storyboard: dict[str, object]) -> dict[str, object]:
+    text = storyboard_text(item, storyboard)
+    style = rule_music_style(text)
+    reason = "เลือกจากประเด็นข่าวและโทนการ์ตูนล้อเลียน"
+    try:
+        response = OpenAI().chat.completions.create(
+            model=env("OPENAI_MODEL", "gpt-5-mini"),
+            messages=[
+                {"role": "system", "content": "เลือกเพลงประกอบคลิปข่าวฟุตบอลการ์ตูนล้อเลียน ตอบ JSON เท่านั้น"},
+                {"role": "user", "content": json.dumps({
+                    "title": item.title[:240],
+                    "summary": item.summary[:500],
+                    "caption": str(storyboard.get("caption", ""))[:300],
+                    "choices": list(MUSIC_STYLES),
+                    "instruction": "เลือก style หนึ่งค่าจาก choices พร้อม reason ภาษาไทยสั้นๆ",
+                }, ensure_ascii=False)},
+            ],
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(response.choices[0].message.content or "{}")
+        picked = str(data.get("style", "")).strip().lower()
+        if picked in MUSIC_STYLES:
+            style = picked
+        if data.get("reason"):
+            reason = str(data["reason"])[:180]
+    except Exception as exc:
+        LOG.warning("Music analysis AI unavailable; using rule-based style %s: %s", style, exc)
+    profile = MUSIC_STYLES[style]
+    plan = {
+        "style": style,
+        "label": profile["label"],
+        "bpm": profile["bpm"],
+        "minor": profile["minor"],
+        "volume": profile["volume"],
+        "reason": reason,
+        "source": "original_bed_no_copyright",
+    }
+    LOG.info("Music plan: %s (%s bpm) %s", plan["style"], plan["bpm"], plan["reason"])
+    return plan
+
+
+def synthesize_bed(path: Path, plan: dict[str, object], seconds: int = DURATION) -> None:
+    rate = 22050
+    bpm = int(plan.get("bpm", 112))
+    minor = bool(plan.get("minor"))
+    step = 60.0 / bpm
+    freqs = (196.0, 233.1, 293.7, 349.2) if minor else (196.0, 246.9, 293.7, 392.0)
+    samples: list[float] = []
+    total = int(rate * seconds)
+    for i in range(total):
+        t = i / rate
+        beat = int(t / step)
+        freq = freqs[beat % len(freqs)]
+        kick = math.exp(-((t % step) * 18)) * math.sin(2 * math.pi * 70 * t)
+        bass = 0.22 * math.sin(2 * math.pi * freq * t)
+        spark = 0.08 * math.sin(2 * math.pi * freq * 2 * t) if beat % 2 == 0 else 0.0
+        fade = min(t / 0.35, 1.0, max(0.0, (seconds - t) / 1.2))
+        samples.append(max(-1.0, min(1.0, (kick * 0.35 + bass + spark) * fade)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "w") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(b"".join(struct.pack("<h", int(sample * 30000)) for sample in samples))
+
+
+def attach_music(video: Path, plan: dict[str, object]) -> dict[str, object]:
+    if env("SKIP_MUSIC") in {"1", "true", "yes"}:
+        plan["attached"] = False
+        return plan
+    with tempfile.TemporaryDirectory(prefix="football-music-") as tmp:
+        bed = Path(tmp) / "bed.wav"
+        mixed = Path(tmp) / "mixed.mp4"
+        synthesize_bed(bed, plan)
+        volume = float(plan.get("volume", 0.15))
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(video), "-i", str(bed),
+            "-filter_complex", f"[1:a]volume={volume},afade=t=in:st=0:d=0.4,afade=t=out:st={DURATION-1.4}:d=1.3[a]",
+            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", str(mixed),
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        mixed.replace(video)
+    plan["attached"] = True
+    LOG.info("Attached %s music bed to %s", plan["style"], video)
+    return plan
 
 
 def make_image_prompt(item: NewsItem, scene: dict[str, str], scene_index: int) -> str:
@@ -310,7 +427,7 @@ def render_video(scene_images: list[Path], storyboard: dict[str, object], output
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
-def build_caption(item: NewsItem, storyboard: dict[str, object]) -> str:
+def build_caption(item: NewsItem, storyboard: dict[str, object], music: dict[str, object] | None = None) -> str:
     try:
         post = write_post(item, {"main_angle": "คลิปการ์ตูนล้อเลียนข่าวฟุตบอล", "reason": item.summary[:200]})
         tags = " ".join(str(tag).strip() for tag in post.get("hashtags", []) if str(tag).strip())
@@ -318,6 +435,8 @@ def build_caption(item: NewsItem, storyboard: dict[str, object]) -> str:
     except Exception as exc:
         LOG.warning("write_post failed; using storyboard caption: %s", exc)
         parts = [str(storyboard.get("caption") or item.title)]
+    if music:
+        parts.append(f"เพลงประกอบ: {music.get('label', music.get('style'))}")
     parts.extend([
         "การ์ตูนล้อเลียนเพื่อความบันเทิง ตรวจสอบข่าวต้นทางก่อนแชร์",
         f"แหล่งข่าว: {item.source} {item.url}",
@@ -383,24 +502,27 @@ def main() -> int:
     if not item.image_url:
         raise RuntimeError("No real news image found; video was skipped")
     storyboard = generate_storyboard(item)
+    music = analyze_music(item, storyboard)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     scene_dir = output_dir / f"scenes_{stamp}"
     scene_results = generate_scene_images(item, storyboard, scene_dir)
     video_path = output_dir / f"football_motion_comic_{stamp}.mp4"
     render_video([Path(entry["path"]) for entry in scene_results], storyboard, video_path, required_env("FONT_PATH"))
-    caption = build_caption(item, storyboard)
+    music = attach_music(video_path, music)
+    caption = build_caption(item, storyboard, music)
     draft = {
         "created_at": stamp,
         "duration_seconds": DURATION,
         "format": "vertical 1080x1920 MP4",
         "status": "ready_to_post",
-        "pipeline": ["news_validated", "storyboard_prompt_written", "four_ai_images_generated", "video_rendered"],
+        "pipeline": ["news_validated", "storyboard_prompt_written", "music_analyzed", "four_ai_images_generated", "video_rendered", "music_attached"],
         "item": asdict(item),
         "storyboard": storyboard,
+        "music": music,
         "scene_images": scene_results,
         "video": str(video_path),
         "caption": caption,
-        "review_notes": "ตรวจชื่อผู้เล่น ตัวเลข ความหมายของข่าว ความเหมาะสมของมุก ภาพทั้ง 4 ฉาก และสิทธิ์สื่อก่อนเผยแพร่",
+        "review_notes": "ตรวจชื่อผู้เล่น ตัวเลข ความหมายของข่าว ความเหมาะสมของมุก ภาพทั้ง 4 ฉาก เพลงประกอบ และสิทธิ์สื่อก่อนเผยแพร่",
     }
     should_post = env("POST_TO_FACEBOOK", "1") not in {"0", "false", "no"} and env("VIDEO_DRY_RUN") not in {"1", "true", "yes"}
     post_error = None

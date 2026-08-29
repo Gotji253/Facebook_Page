@@ -46,7 +46,6 @@ def load_font(path: str, size: int):
 
 
 def wrap(draw, text: str, font, width: int) -> list[str]:
-    """Wrap Thai and English so a line never exceeds width."""
     text = " ".join(str(text).split())
     if not text:
         return [""]
@@ -330,21 +329,41 @@ def publish_video(video: Path, caption: str, page_id: str, token: str) -> dict:
     if not video.is_file() or video.stat().st_size == 0:
         raise RuntimeError(f"Video file missing: {video}")
     version = env("FB_API_VERSION", "v23.0")
-    url = f"https://graph.facebook.com/{version}/{page_id}/videos"
-    with video.open("rb") as handle:
-        response = requests.post(
-            url,
-            data={
-                "access_token": token,
-                "description": caption,
-                "title": caption.split("\n", 1)[0][:80],
-            },
-            files={"source": (video.name, handle, "video/mp4")},
-            timeout=(20, 180),
-        )
-    if not response.ok:
-        raise RuntimeError(f"Facebook video API error {response.status_code}: {response.text[:500]}")
-    return response.json()
+    identity = requests.get(
+        f"https://graph.facebook.com/{version}/me",
+        params={"fields": "id,name", "access_token": token},
+        timeout=30,
+    )
+    me = identity.json() if identity.ok else {}
+    LOG.info("Page token identity name=%s id=%s", me.get("name"), me.get("id"))
+    payload = {
+        "access_token": token,
+        "description": caption,
+        "title": caption.split("\n", 1)[0][:80],
+        "published": "true",
+    }
+    endpoints = [
+        f"https://graph.facebook.com/{version}/me/videos",
+        f"https://graph.facebook.com/{version}/{me.get('id')}/videos" if me.get("id") else "",
+        f"https://graph.facebook.com/{version}/{page_id}/videos",
+    ]
+    errors = []
+    for url in endpoints:
+        if not url:
+            continue
+        LOG.info("Uploading video to %s", url.split("?")[0])
+        with video.open("rb") as handle:
+            response = requests.post(
+                url,
+                data=payload,
+                files={"source": (video.name, handle, "video/mp4")},
+                timeout=(20, 180),
+            )
+        if response.ok:
+            return response.json()
+        errors.append(f"{url}: {response.status_code} {response.text[:240]}")
+        LOG.warning("Video publish failed: %s", errors[-1])
+    raise RuntimeError("Facebook video API error: " + " | ".join(errors))
 
 
 def main() -> int:
@@ -384,13 +403,20 @@ def main() -> int:
         "review_notes": "ตรวจชื่อผู้เล่น ตัวเลข ความหมายของข่าว ความเหมาะสมของมุก ภาพทั้ง 4 ฉาก และสิทธิ์สื่อก่อนเผยแพร่",
     }
     should_post = env("POST_TO_FACEBOOK", "1") not in {"0", "false", "no"} and env("VIDEO_DRY_RUN") not in {"1", "true", "yes"}
+    post_error = None
     if should_post:
-        result = publish_video(video_path, caption, required_env("FB_PAGE_ID"), required_env("FB_PAGE_TOKEN"))
-        draft["status"] = "posted"
-        draft["facebook"] = result
-        draft["pipeline"].append("posted_to_facebook")
-        state.setdefault("posted_ids", []).append(item.id)
-        LOG.info("Published video to Facebook: %s", result)
+        try:
+            result = publish_video(video_path, caption, required_env("FB_PAGE_ID"), required_env("FB_PAGE_TOKEN"))
+            draft["status"] = "posted"
+            draft["facebook"] = result
+            draft["pipeline"].append("posted_to_facebook")
+            state.setdefault("posted_ids", []).append(item.id)
+            LOG.info("Published video to Facebook: %s", result)
+        except Exception as exc:
+            post_error = exc
+            draft["status"] = "render_ok_post_failed"
+            draft["facebook_error"] = str(exc)[:800]
+            LOG.exception("Facebook video publish failed: %s", exc)
     else:
         draft["status"] = "draft_pending_review"
         LOG.info("Skipped Facebook publish (dry-run or POST_TO_FACEBOOK disabled)")
@@ -398,6 +424,8 @@ def main() -> int:
     state.setdefault("drafted_ids", []).append(item.id)
     save_video_state(state_path, state)
     LOG.info("Created video: %s", video_path)
+    if post_error:
+        raise post_error
     return 0
 
 

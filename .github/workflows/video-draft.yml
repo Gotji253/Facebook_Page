@@ -60,7 +60,7 @@ jobs:
         run: python video_draft.py
 
       - name: Upload draft artifact
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: football-video-draft-${{ github.run_id }}
@@ -68,10 +68,11 @@ jobs:
             video_drafts/*.mp4
             video_drafts/*.json
             video_drafts/scenes_*/*.png
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 14
 
       - name: Persist draft state
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -8,9 +8,12 @@ from pathlib import Path
 
 from PIL import Image
 
+import ai_client
 import video_draft as vd
 from ai_client import chat_json, generate_image_bytes
+from hf_image import generate_hf_image
 
+ai_client._hf_image = generate_hf_image
 LOG = logging.getLogger("video_post")
 
 

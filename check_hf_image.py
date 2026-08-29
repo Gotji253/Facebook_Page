@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-from ai_client import generate_image_bytes
+from hf_image import generate_hf_image
 
 
 def main() -> int:
@@ -9,7 +9,7 @@ def main() -> int:
         "editorial football caricature, expressive cartoon footballer celebrating, "
         "bright comic colors, vertical 9:16, no text, no logos, no watermark"
     )
-    data = generate_image_bytes(prompt)
+    data = generate_hf_image(prompt)
     out = Path("hf_test.png")
     out.write_bytes(data)
     print(f"Hugging Face image OK bytes={len(data)} file={out}")

@@ -114,6 +114,68 @@ def finish_last_word(short: str, long: str, limit: int) -> str:
     return complete_phrase(short, limit)
 
 
+HANGING_TAILS = {
+    "สุด", "อย่าง", "ด้วย", "เพื่อ", "ที่", "ของ", "และ", "จะ", "ได้", "ไม่",
+    "กับ", "จาก", "ส่วน", "ยัง", "ให้", "มา", "ไป", "อยู่", "แล้ว", "กว่า",
+    "แบบ", "ความ", "การ", "ใน", "ต่อ", "หลัง", "เพราะ", "แต่", "เลย", "จน",
+}
+
+
+def next_source_token(short: str, long: str) -> str:
+    short = re.sub(r"\s+", " ", short or "").strip()
+    long = re.sub(r"\s+", " ", long or "").strip()
+    if long.startswith(short):
+        rest = long[len(short):].lstrip()
+        match = re.match(r"\S+", rest)
+        return match.group(0) if match else ""
+    tokens = long.split()
+    parts = short.split()
+    if not parts:
+        return tokens[0] if tokens else ""
+    for index, token in enumerate(tokens):
+        if token == parts[-1] and index + 1 < len(tokens):
+            if parts == tokens[index + 1 - len(parts): index + 1]:
+                return tokens[index + 1]
+    return ""
+
+
+def finish_phrase(short: str, long: str, limit: int) -> str:
+    text = finish_last_word(short, long, limit)
+    while text:
+        last = text.split()[-1]
+        if last not in HANGING_TAILS:
+            break
+        nxt = next_source_token(text, long)
+        if nxt:
+            candidate = f"{text} {nxt}".strip()
+            if len(candidate) <= limit + 24:
+                text = candidate
+                continue
+        if " " in text:
+            text = text.rsplit(" ", 1)[0]
+        break
+    return text.strip()
+
+
+def source_scores(item) -> list[str]:
+    source = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}"
+    scores = []
+    for score in SCORE_RE.findall(source):
+        compact = re.sub(r"\s+", "", score).replace("\u2013", "-")
+        if compact not in scores:
+            scores.append(compact)
+    return scores
+
+
+def with_score(text: str, scores: list[str], limit: int) -> str:
+    compact = re.sub(r"\s+", "", text or "")
+    for score in scores:
+        if score not in compact and score.replace("-", "") not in compact:
+            text = complete_phrase(f"{text} {score}".strip(), limit + 8)
+            compact = re.sub(r"\s+", "", text)
+    return text
+
+
 def first_sentence(text: str, limit: int = 56) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if not text:
@@ -151,9 +213,9 @@ def looks_truncated(text: str) -> bool:
         return True
     if text[-1] in ".!ฮ?…":
         return False
-    if text.endswith(("และ", "ที่", "ของ", "ใน", "จะ", "ได้", "ไม่", "กับ", "จาก", "เพื่อ", "ส่วน")):
-        return True
     last = text.split()[-1] if text.split() else text
+    if last in HANGING_TAILS:
+        return True
     if 1 <= len(re.sub(r"\s+", "", last)) <= 3 and text[-1] not in ".!ฮ?…":
         return True
     return False
@@ -220,13 +282,16 @@ def finalize_storyboard(item, data: dict, limit: int = 64) -> dict:
     raw_hook = thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง")
     raw_body = thai_or(str(data.get("body") or ""), raw_hook)
     body = one_story(raw_body) or raw_hook
-    hook = finish_last_word(complete_phrase(raw_hook, limit), body, limit)
+    scores = source_scores(item)
+    hook = finish_phrase(complete_phrase(raw_hook, limit), body, limit)
+    hook = with_score(hook, scores, limit)
     recap = first_sentence(body, 80) or complete_phrase(body, 80)
-    recap = finish_last_word(recap, body, 80)
+    recap = finish_phrase(recap, body, 80)
     if recap == hook or len(re.sub(r"\s+", "", recap)) < 18:
         extra = complete_phrase(body, 80)
         recap = extra if extra != hook else complete_phrase(hook + " " + body, 80)
-        recap = finish_last_word(recap, body, 80)
+        recap = finish_phrase(recap, body, 80)
+    recap = with_score(recap, scores, 80)
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     style = str(data.get("music_style", "comedy")).strip().lower()
     if style not in vd.MUSIC_STYLES:

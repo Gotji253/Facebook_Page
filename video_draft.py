@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a 15-second Thai football motion-comic and post it to the Facebook Page."""
+"""Create a 5-second Thai football motion-comic and post it to the Facebook Page."""
 from __future__ import annotations
 
 import base64
@@ -30,7 +30,7 @@ from football_poster import (
 
 LOG = logging.getLogger("video_draft")
 W, H = 1080, 1920
-FPS, DURATION, SCENE_COUNT = 30, 15, 4
+FPS, DURATION, SCENE_COUNT = 30, 5, 2
 BOX_PAD_X = 48
 BOX_PAD_Y = 26
 BOX_TOP_MIN = 1080
@@ -108,49 +108,44 @@ def validate_news(item: NewsItem) -> None:
 
 
 def fallback_storyboard(item: NewsItem) -> dict[str, object]:
+    title = item.title[:90]
+    point = (item.summary or title).strip()[:110]
     return {
         "scenes": [
-            {"title": "ข่าวมาแล้ว", "line": item.title[:110], "narration": "มาดูข่าวฟุตบอลนี้แบบการ์ตูนล้อเลียนกันครับ"},
-            {"title": "ประเด็นสำคัญ", "line": "เรื่องนี้ทำให้แฟนบอลต้องหยิบเครื่องคิดเลขขึ้นมา", "narration": "รายละเอียดจริงอยู่ในข่าวต้นทาง ส่วนมุกนี้ทำเพื่อความบันเทิง"},
-            {"title": "มุมแฟนบอล", "line": "แฟนบอลบอกว่า ขอเวลาตั้งสติก่อนหนึ่งตลาดนักเตะ", "narration": "นี่คือการล้อเลียนแบบสุภาพ ไม่ใช่การกล่าวหาใคร"},
-            {"title": "บทสรุป", "line": "ตรวจสอบข่าวต้นทางก่อนแชร์ แล้วพบกันคลิปหน้า", "narration": "ติดตามข่าวจริงและใช้วิจารณญาณก่อนแชร์ครับ"},
+            {"title": "เกิดอะไรขึ้น", "line": title, "narration": title, "image_prompt": "editorial football caricature, breaking news, no text, no logos"},
+            {"title": "สรุปสั้น", "line": point, "narration": point, "image_prompt": "editorial football caricature, recap, no text, no logos"},
         ],
-        "caption": f"การ์ตูนล้อเลียนข่าวฟุตบอลเพื่อความบันเทิง: {item.title}",
+        "caption": title,
+        "hook": title[:40],
+        "body": point,
+        "cta": "แฟนบอลมองเรื่องนี้ยังไงครับ?",
+        "hashtags": ["#ข่าวฟุตบอล", "#รอบรู้Insight", "#เล่าข่าวสั้น"],
+        "music_style": "comedy",
     }
 
 
 def generate_storyboard(item: NewsItem) -> dict[str, object]:
     validate_news(item)
-    client = OpenAI()
     request = {
-        "title": item.title[:300],
-        "summary": item.summary[:1400],
+        "title": item.title[:180],
+        "summary": item.summary[:280],
         "source": item.source,
-        "source_url": item.url,
-        "instruction": (
-            "ตอบเป็น valid JSON เท่านั้น โดยมี scenes จำนวน 4 ฉากและ caption. "
-            "แต่ละ scene ต้องมี title, line, narration และ image_prompt. "
-            "title สั้นไม่เกิน 18 คำ line สั้นไม่เกิน 28 คำ. "
-            "สรุปข่าวให้ผู้ชมเข้าใจง่าย ใช้มุกตลกภาษาไทยแบบสุภาพและระบุว่าเป็นการล้อเลียน. "
-            "ห้ามเติมข้อเท็จจริง ตัวเลข หรือข้อกล่าวหาที่ไม่มีในข่าว. "
-            "image_prompt ต้องเป็นภาษาอังกฤษสำหรับภาพการ์ตูนบรรณาธิการแนวเสียดสีฟุตบอล "
-            "ไม่มีตัวหนังสือ โลโก้ สโมสร หรือลายน้ำในภาพ และให้ใช้ตัวละครนักฟุตบอลแบบ caricature ไม่ใช่ภาพถ่าย"
-        ),
+        "instruction": "JSON สั้น: scenes 2 ฉาก, caption, hook, body, cta, hashtags, music_style. ฉาก1=เกิดอะไรขึ้น ฉาก2=สรุปประเด็น ภาษาไทยเข้าใจง่าย",
     }
     try:
-        response = client.chat.completions.create(
+        response = OpenAI().chat.completions.create(
             model=env("OPENAI_MODEL", "gpt-5-mini"),
             messages=[
-                {"role": "system", "content": "คุณเป็นบรรณาธิการข่าวฟุตบอลและนักเขียนมุกภาษาไทย ต้องแยกข้อเท็จจริงออกจากมุกล้อเลียน และตอบเป็น JSON เท่านั้น"},
+                {"role": "system", "content": "บรรณาธิการข่าวฟุตบอล ตอบ JSON สั้นเท่านั้น"},
                 {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
+            max_completion_tokens=700,
         )
         data = json.loads(response.choices[0].message.content or "{}")
     except Exception as exc:
         LOG.warning("Storyboard AI failed; using safe fallback storyboard: %s", exc)
         return fallback_storyboard(item)
-
     scenes = data.get("scenes")
     if isinstance(scenes, dict):
         scenes = list(scenes.values())
@@ -159,15 +154,26 @@ def generate_storyboard(item: NewsItem) -> dict[str, object]:
         for scene in scenes[:SCENE_COUNT]:
             if isinstance(scene, dict):
                 clean.append({
-                    "title": str(scene.get("title", "ฉากข่าวฟุตบอล"))[:70],
-                    "line": str(scene.get("line", "ติดตามข่าวฟุตบอลแบบเข้าใจง่าย"))[:110],
-                    "narration": str(scene.get("narration", "นี่คือการ์ตูนล้อเลียนเพื่อความบันเทิง"))[:320],
-                    "image_prompt": str(scene.get("image_prompt", "editorial football caricature, expressive players, dramatic stadium lighting, no text, no logos, no watermark"))[:1200],
+                    "title": str(scene.get("title", "สรุปข่าว"))[:40],
+                    "line": str(scene.get("line", item.title))[:90],
+                    "narration": str(scene.get("narration", scene.get("line", item.title)))[:140],
+                    "image_prompt": str(scene.get("image_prompt", "editorial football caricature, no text"))[:280],
                 })
     if len(clean) != SCENE_COUNT:
-        LOG.warning("Storyboard had invalid scene count; using safe fallback storyboard")
         return fallback_storyboard(item)
-    return {"scenes": clean, "caption": str(data.get("caption", f"การ์ตูนล้อเลียนข่าวฟุตบอล: {item.title}"))[:1800]}
+    tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
+    style = str(data.get("music_style", "")).strip().lower()
+    if style not in MUSIC_STYLES:
+        style = rule_music_style(f"{item.title} {item.summary}")
+    return {
+        "scenes": clean,
+        "caption": str(data.get("caption") or data.get("hook") or item.title)[:500],
+        "hook": str(data.get("hook") or clean[0]["line"])[:80],
+        "body": str(data.get("body") or clean[1]["line"])[:400],
+        "cta": str(data.get("cta") or "แฟนบอลมองเรื่องนี้ยังไงครับ?")[:120],
+        "hashtags": [str(tag).strip()[:40] for tag in tags if str(tag).strip()][:5] or ["#ข่าวฟุตบอล", "#รอบรู้Insight", "#เล่าข่าวสั้น"],
+        "music_style": style,
+    }
 
 
 def storyboard_text(item: NewsItem, storyboard: dict[str, object]) -> str:
@@ -192,32 +198,8 @@ def rule_music_style(text: str) -> str:
 
 
 def analyze_music(item: NewsItem, storyboard: dict[str, object]) -> dict[str, object]:
-    text = storyboard_text(item, storyboard)
-    style = rule_music_style(text)
-    reason = "เลือกจากประเด็นข่าวและโทนการ์ตูนล้อเลียน"
-    try:
-        response = OpenAI().chat.completions.create(
-            model=env("OPENAI_MODEL", "gpt-5-mini"),
-            messages=[
-                {"role": "system", "content": "เลือกเพลงประกอบคลิปข่าวฟุตบอลการ์ตูนล้อเลียน ตอบ JSON เท่านั้น"},
-                {"role": "user", "content": json.dumps({
-                    "title": item.title[:240],
-                    "summary": item.summary[:500],
-                    "caption": str(storyboard.get("caption", ""))[:300],
-                    "choices": list(MUSIC_STYLES),
-                    "instruction": "เลือก style หนึ่งค่าจาก choices พร้อม reason ภาษาไทยสั้นๆ",
-                }, ensure_ascii=False)},
-            ],
-            response_format={"type": "json_object"},
-        )
-        data = json.loads(response.choices[0].message.content or "{}")
-        picked = str(data.get("style", "")).strip().lower()
-        if picked in MUSIC_STYLES:
-            style = picked
-        if data.get("reason"):
-            reason = str(data["reason"])[:180]
-    except Exception as exc:
-        LOG.warning("Music analysis AI unavailable; using rule-based style %s: %s", style, exc)
+    picked = str(storyboard.get("music_style", "")).strip().lower()
+    style = picked if picked in MUSIC_STYLES else rule_music_style(storyboard_text(item, storyboard))
     profile = MUSIC_STYLES[style]
     plan = {
         "style": style,
@@ -225,7 +207,7 @@ def analyze_music(item: NewsItem, storyboard: dict[str, object]) -> dict[str, ob
         "bpm": profile["bpm"],
         "minor": profile["minor"],
         "volume": profile["volume"],
-        "reason": reason,
+        "reason": "เลือกจากคำขอวิดีโอครั้งเดียวหรือกติกาโทนข่าว",
         "source": "original_bed_no_copyright",
     }
     LOG.info("Music plan: %s (%s bpm) %s", plan["style"], plan["bpm"], plan["reason"])
@@ -247,7 +229,7 @@ def synthesize_bed(path: Path, plan: dict[str, object], seconds: int = DURATION)
         kick = math.exp(-((t % step) * 18)) * math.sin(2 * math.pi * 70 * t)
         bass = 0.22 * math.sin(2 * math.pi * freq * t)
         spark = 0.08 * math.sin(2 * math.pi * freq * 2 * t) if beat % 2 == 0 else 0.0
-        fade = min(t / 0.35, 1.0, max(0.0, (seconds - t) / 1.2))
+        fade = min(t / 0.25, 1.0, max(0.0, (seconds - t) / 0.6))
         samples.append(max(-1.0, min(1.0, (kick * 0.35 + bass + spark) * fade)))
     path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(path), "w") as wav:
@@ -266,9 +248,10 @@ def attach_music(video: Path, plan: dict[str, object]) -> dict[str, object]:
         mixed = Path(tmp) / "mixed.mp4"
         synthesize_bed(bed, plan)
         volume = float(plan.get("volume", 0.15))
+        fade_out = max(0.4, DURATION - 0.8)
         subprocess.run([
             "ffmpeg", "-y", "-i", str(video), "-i", str(bed),
-            "-filter_complex", f"[1:a]volume={volume},afade=t=in:st=0:d=0.4,afade=t=out:st={DURATION-1.4}:d=1.3[a]",
+            "-filter_complex", f"[1:a]volume={volume},afade=t=in:st=0:d=0.2,afade=t=out:st={fade_out}:d=0.7[a]",
             "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", str(mixed),
         ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         mixed.replace(video)
@@ -278,14 +261,10 @@ def attach_music(video: Path, plan: dict[str, object]) -> dict[str, object]:
 
 
 def make_image_prompt(item: NewsItem, scene: dict[str, str], scene_index: int) -> str:
+    extra = scene.get("image_prompt", "editorial football caricature, no text")
     return (
-        "Create a vertical 9:16 editorial cartoon illustration for a Thai football news parody video. "
-        "Keep the main character in the upper two-thirds of the frame with clear headroom at the bottom for captions. "
-        "Use fictionalized, non-photorealistic footballer caricatures inspired only by the article context; "
-        "do not copy a real person's exact face, do not use club logos, brand marks, readable text, scoreboards, "
-        "or watermarks. Make the scene visually explain the news with clear action and expressive body language. "
-        "Bright professional comic colors, clean shapes, high contrast, suitable for social video. "
-        f"Article context: {item.title[:240]}. Scene {scene_index + 1}: {scene['image_prompt']}"
+        "Vertical 9:16 editorial football caricature, no text, no logos, no watermark. "
+        f"News: {item.title[:120]}. Scene {scene_index + 1}: {extra[:220]}"
     )
 
 
@@ -299,7 +278,7 @@ def generate_scene_images(item: NewsItem, storyboard: dict[str, object], output_
         response = client.images.generate(
             model=env("OPENAI_IMAGE_MODEL", "gpt-image-1"),
             prompt=prompt,
-            size=env("OPENAI_IMAGE_SIZE", "1024x1536"),
+            size=env("OPENAI_IMAGE_SIZE", "768x1344"),
         )
         payload = response.data[0]
         image_path = output_dir / f"scene_{index + 1:02d}.png"
@@ -376,14 +355,12 @@ def draw_scene(base: Image.Image, scene: dict[str, str], scene_index: int, font_
 
     box_top = BOX_TOP_MIN
     box_bottom = min(BOX_BOTTOM_MAX, box_top + content_h)
-
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
     od.rectangle((0, box_top - 70, W, H), fill=(7, 18, 45, 70))
     od.rounded_rectangle((box_left, box_top, box_right, box_bottom), radius=28, fill=(7, 18, 45, 232), outline=(255, 214, 88, 230), width=3)
     frame = Image.alpha_composite(frame, overlay)
     draw = ImageDraw.Draw(frame)
-
     y = box_top + BOX_PAD_Y
     brand_font = load_font(font_path, 28)
     brand = "รอบรู้ : INSIGHT"
@@ -394,8 +371,7 @@ def draw_scene(base: Image.Image, scene: dict[str, str], scene_index: int, font_
     y = _draw_centered_lines(draw, hook_lines, hook_font, y, "white", hook_gap, inner_left, inner_right)
     y += 8
     _draw_centered_lines(draw, summary_lines, summary_font, y, (255, 240, 160), summary_gap, inner_left, inner_right)
-
-    footer = "การ์ตูนล้อเลียนเพื่อความบันเทิง | ตรวจสอบข่าวต้นทางก่อนแชร์"
+    footer = "สรุปข่าวสั้น | ตรวจสอบข่าวต้นทางก่อนแชร์"
     footer_font = load_font(font_path, 24)
     footer_box = draw.textbbox((0, 0), footer, font=footer_font)
     footer_x = (W - (footer_box[2] - footer_box[0])) // 2
@@ -414,7 +390,7 @@ def render_video(scene_images: list[Path], storyboard: dict[str, object], output
             frame.save(frame_path, quality=92)
             composed.append(frame_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        scene_len = DURATION / SCENE_COUNT
+        scene_len = DURATION / max(1, len(composed))
         cmd = ["ffmpeg", "-y"]
         for path in composed:
             cmd.extend(["-loop", "1", "-t", f"{scene_len:.2f}", "-i", str(path)])
@@ -428,17 +404,24 @@ def render_video(scene_images: list[Path], storyboard: dict[str, object], output
 
 
 def build_caption(item: NewsItem, storyboard: dict[str, object], music: dict[str, object] | None = None) -> str:
-    try:
-        post = write_post(item, {"main_angle": "คลิปการ์ตูนล้อเลียนข่าวฟุตบอล", "reason": item.summary[:200]})
-        tags = " ".join(str(tag).strip() for tag in post.get("hashtags", []) if str(tag).strip())
-        parts = [post["hook"].strip(), post["body"].strip(), post["cta"].strip(), tags]
-    except Exception as exc:
-        LOG.warning("write_post failed; using storyboard caption: %s", exc)
-        parts = [str(storyboard.get("caption") or item.title)]
+    hook = str(storyboard.get("hook") or "").strip()
+    body = str(storyboard.get("body") or "").strip()
+    cta = str(storyboard.get("cta") or "").strip()
+    tags = " ".join(str(tag).strip() for tag in (storyboard.get("hashtags") or []) if str(tag).strip())
+    if hook and body:
+        parts = [hook, body, cta, tags]
+    else:
+        try:
+            post = write_post(item, {"main_angle": "คลิปสรุปข่าวฟุตบอล", "reason": item.summary[:200]})
+            tags = " ".join(str(tag).strip() for tag in post.get("hashtags", []) if str(tag).strip())
+            parts = [post["hook"].strip(), post["body"].strip(), post["cta"].strip(), tags]
+        except Exception as exc:
+            LOG.warning("write_post failed; using storyboard caption: %s", exc)
+            parts = [str(storyboard.get("caption") or item.title)]
     if music:
         parts.append(f"เพลงประกอบ: {music.get('label', music.get('style'))}")
     parts.extend([
-        "การ์ตูนล้อเลียนเพื่อความบันเทิง ตรวจสอบข่าวต้นทางก่อนแชร์",
+        "สรุปข่าวสั้น ตรวจสอบข่าวต้นทางก่อนแชร์",
         f"แหล่งข่าว: {item.source} {item.url}",
     ])
     return "\n\n".join(part for part in parts if part).strip()
@@ -515,14 +498,14 @@ def main() -> int:
         "duration_seconds": DURATION,
         "format": "vertical 1080x1920 MP4",
         "status": "ready_to_post",
-        "pipeline": ["news_validated", "storyboard_prompt_written", "music_analyzed", "four_ai_images_generated", "video_rendered", "music_attached"],
+        "pipeline": ["news_validated", "one_ai_storyboard", "two_ai_images", "video_rendered", "music_attached"],
         "item": asdict(item),
         "storyboard": storyboard,
         "music": music,
         "scene_images": scene_results,
         "video": str(video_path),
         "caption": caption,
-        "review_notes": "ตรวจชื่อผู้เล่น ตัวเลข ความหมายของข่าว ความเหมาะสมของมุก ภาพทั้ง 4 ฉาก เพลงประกอบ และสิทธิ์สื่อก่อนเผยแพร่",
+        "review_notes": "ตรวจชื่อผู้เล่น ตัวเลข และสรุป 2 ฉากก่อนเผยแพร่",
     }
     should_post = env("POST_TO_FACEBOOK", "1") not in {"0", "false", "no"} and env("VIDEO_DRY_RUN") not in {"1", "true", "yes"}
     post_error = None

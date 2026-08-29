@@ -20,6 +20,8 @@ ai_client._hf_image = generate_hf_image
 LOG = logging.getLogger("video_post")
 THAI_RE = re.compile(r"[\u0E00-\u0E7F]")
 IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp)(?:$|\?)", re.I)
+SCORE_RE = re.compile(r"\b\d{1,2}\s*[-\u2013]\s*\d{1,2}\b")
+NAME_RE = re.compile(r"\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b")
 MAX_PHOTO_BYTES = 4_000_000
 SCENE_LABELS = {"สรุปสั้น", "สรุปข่าว", "สรุปข่าวสั้น"}
 SKIP_NEWS = (
@@ -34,6 +36,10 @@ KEEP_NEWS = (
     "transfer", "midfielder", "striker", "goalkeeper", "winger", "manager",
     "sacked", "signed", "hat-trick", "match", "goal", "fixture",
     "ฟุตบอล", "บอล", "พรีเมียร์", "ชามเปียนส์", "ย้ายทีม",
+)
+GENERIC_FALLBACK = (
+    "เกิดประเด็นร้อนในวงการลูกหนัง",
+    "รายละเอียดอยู่ในข่าวต้นทาง",
 )
 
 
@@ -52,12 +58,22 @@ def is_football_news(item) -> bool:
     return any(word in text for word in KEEP_NEWS)
 
 
-def first_sentence(text: str, limit: int = 90) -> str:
+def complete_phrase(text: str, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rstrip()
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:-/")
+
+
+def first_sentence(text: str, limit: int = 80) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     if not text:
         return ""
     parts = re.split(r"(?<=[ฮ.!\n])\s+", text, maxsplit=1)
-    return parts[0].strip()[:limit]
+    return complete_phrase(parts[0].strip(), limit)
 
 
 def thai_or(text: str, fallback: str) -> str:
@@ -65,30 +81,93 @@ def thai_or(text: str, fallback: str) -> str:
     return text if has_thai(text) else fallback
 
 
+def scene_visible(scene: dict) -> str:
+    return " ".join(str(scene.get(key) or "").strip() for key in ("title", "line")).strip()
+
+
+def looks_truncated(text: str) -> bool:
+    text = (text or "").strip()
+    if len(text) < 8:
+        return True
+    if text[-1] in ".!ฮ?…":
+        return False
+    if text.endswith(("และ", "ที่", "ของ", "ใน", "จะ", "ได้", "ไม่", "กับ", "จาก", "เพื่อ")):
+        return True
+    return bool(re.search(r"[\u0E00-\u0E7F]{1,2}$", text) and len(text) >= 78)
+
+
+def review_on_screen_text(item, storyboard: dict) -> dict:
+    errors: list[str] = []
+    warnings: list[str] = []
+    scenes = storyboard.get("scenes") or []
+    hook = str(storyboard.get("hook") or "").strip()
+    body = str(storyboard.get("body") or "").strip()
+    if len(scenes) != 2:
+        errors.append("ต้องมี 2 ฉาก")
+        return {"ok": False, "errors": errors, "warnings": warnings, "checked": {}}
+    s1 = scene_visible(scenes[0])
+    s2 = scene_visible(scenes[1])
+    if not has_thai(s1):
+        errors.append("ฉาก 1 ไม่มีข้อความภาษาไทย")
+    if not has_thai(s2):
+        errors.append("ฉาก 2 ไม่มีข้อความภาษาไทย")
+    if len(re.sub(r"\s+", "", s1)) < 12:
+        errors.append("ข้อความฉาก 1 สั้นเกินไป")
+    if len(re.sub(r"\s+", "", s2)) < 12:
+        errors.append("ข้อความฉาก 2 สั้นเกินไป")
+    if str(scenes[1].get("title") or "").strip() in SCENE_LABELS:
+        errors.append("ฉาก 2 ยังมีหัวสรุปสั้น")
+    if looks_truncated(str(scenes[0].get("line") or "")):
+        errors.append("ข้อความฉาก 1 ถูกตัดกลาง")
+    if looks_truncated(str(scenes[1].get("title") or "") or str(scenes[1].get("line") or "")):
+        errors.append("ข้อความฉาก 2 ถูกตัดกลาง")
+    source = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}"
+    clip = f"{hook} {body} {s1} {s2}"
+    for score in SCORE_RE.findall(source):
+        compact = re.sub(r"\s+", "", score)
+        if compact not in re.sub(r"\s+", "", clip) and score not in clip:
+            errors.append(f"สกอร์ในข่าวต้นทางคือ {score} แต่ไม่อยู่บนคลิป")
+    skip_names = {"The", "And", "For", "With", "From", "This", "That", "After", "Before", "Against", "Premier", "League", "United", "City", "News", "Sport", "Football"}
+    names = [name for name in NAME_RE.findall(getattr(item, "title", "") or "") if name.split()[0] not in skip_names]
+    if names and not any(name.split()[0].lower() in clip.lower() or name.lower() in source.lower() and name.split()[0].lower() in clip.lower() for name in names[:3]):
+        if not any(name.split()[-1].lower() in clip.lower() for name in names[:3]):
+            warnings.append("ชื่อในหัวข้อข่าวไม่ขึ้นบนข้อความคลิป")
+    if any(phrase in clip for phrase in GENERIC_FALLBACK) and len(getattr(item, "title", "") or "") > 20:
+        warnings.append("ข้อความยังเป็นประโยคทั่วไป")
+    if hook and hook == s2:
+        warnings.append("ฉาก 1 กับฉาก 2 ซ้ำ")
+    checked = {"scene1": s1, "scene2": s2, "hook": hook, "body": body[:160]}
+    ok = not errors
+    LOG.info("Clip review ok=%s errors=%s warnings=%s", ok, errors, warnings)
+    return {"ok": ok, "errors": errors, "warnings": warnings, "checked": checked}
+
+
 def fallback_storyboard(item):
-    return finalize_storyboard(item, {
+    board = finalize_storyboard(item, {
         "hook": "เกิดประเด็นร้อนในวงการลูกหนัง",
         "body": "รายละเอียดอยู่ในข่าวต้นทาง ติดตามให้ครบก่อนแชร์",
         "cta": "แฟนบอลมองเรื่องนี้ยังไงครับ?",
         "hashtags": ["#ข่าวฟุตบอล", "#รอบรู้Insight", "#เล่าข่าวสั้น"],
         "music_style": "comedy",
     })
+    board["clip_review"] = review_on_screen_text(item, board)
+    return board
 
 
 def finalize_storyboard(item, data: dict) -> dict:
-    hook = thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง")[:80]
+    hook = complete_phrase(thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง"), 72)
     body = thai_or(str(data.get("body") or ""), "รายละเอียดอยู่ในข่าวต้นทาง ติดตามให้ครบก่อนแชร์")[:400]
-    recap = first_sentence(body, 90) or "รายละเอียดอยู่ในข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
+    recap = first_sentence(body, 72) or "รายละเอียดอยู่ในข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
     if recap == hook:
-        recap = "รายละเอียดอยู่ในข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
+        recap = first_sentence(body[len(hook):].strip() or body, 72) or recap
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     style = str(data.get("music_style", "comedy")).strip().lower()
     if style not in vd.MUSIC_STYLES:
         style = "comedy"
     return {
         "scenes": [
-            {"title": "เกิดอะไรขึ้น", "line": hook[:90], "narration": hook[:140], "image_prompt": "real football photo 1"},
-            {"title": recap[:90], "line": "", "narration": body[:140], "image_prompt": "real football photo 2"},
+            {"title": "เกิดอะไรขึ้น", "line": hook, "narration": hook[:140], "image_prompt": "real football photo 1"},
+            {"title": recap, "line": "", "narration": body[:140], "image_prompt": "real football photo 2"},
         ],
         "caption": thai_or(str(data.get("caption") or ""), hook)[:500],
         "hook": hook,
@@ -110,7 +189,8 @@ def generate_storyboard(item):
         "instruction": (
             "ตอบ JSON สั้น มี hook, body, cta, hashtags, music_style. "
             "hook และ body ต้องเป็นภาษาไทยล้วน ห้ามคัดลอกหัวข้ออังกฤษ. "
-            "hook ไม่เกิน 18 คำ body 1-2 ประโยคเข้าใจง่าย. "
+            "hook ไม่เกิน 14 คำ จบประโยคให้ครบ. body 1 ประโยคสั้นเข้าใจง่าย. "
+            "ถ้าข่าวมีสกอร์หรือชื่อต้องใส่ครบ. "
             "music_style เป็น hype, triumph, tense, comedy หรือ calm"
         ),
     }
@@ -121,12 +201,20 @@ def generate_storyboard(item):
         )
     except Exception as exc:
         LOG.warning("Storyboard AI failed; using fallback: %s", exc)
-        return fallback_storyboard(item)
-    if not isinstance(data, dict):
-        return fallback_storyboard(item)
-    board = finalize_storyboard(item, data)
-    if not has_thai(board["hook"]) or not has_thai(board["scenes"][1]["title"]):
-        return fallback_storyboard(item)
+        board = fallback_storyboard(item)
+    else:
+        if not isinstance(data, dict):
+            board = fallback_storyboard(item)
+        else:
+            board = finalize_storyboard(item, data)
+            if not has_thai(board["hook"]) or not has_thai(board["scenes"][1]["title"]):
+                board = fallback_storyboard(item)
+    review = review_on_screen_text(item, board)
+    board["clip_review"] = review
+    vd._clip_review = review
+    vd._clip_item_title = getattr(item, "title", "")
+    if not review["ok"]:
+        LOG.warning("Clip text failed review: %s", review["errors"])
     return board
 
 
@@ -154,6 +242,7 @@ def _wrap_chars(draw, text: str, font, width: int):
 _orig_draw = vd.draw_scene
 _orig_fetch = vd.fetch_feed
 _orig_validate = vd.validate_news
+_orig_publish = vd.publish_video
 
 
 def draw_scene(base, scene, scene_index, font_path):
@@ -179,6 +268,13 @@ def validate_news(item) -> None:
     _orig_validate(item)
     if not is_football_news(item):
         raise ValueError("ข้ามควิซ พอดคาสต์ หรือคอนเทนต์ทั่วไป ใช้เฉพาะข่าวฟุตบอล")
+
+
+def publish_video(video, caption, page_id, token):
+    review = getattr(vd, "_clip_review", None) or {}
+    if not review.get("ok"):
+        raise RuntimeError("ยังไม่โพสต์ ข้อความบนคลิปไม่ผ่าน: " + "; ".join(review.get("errors") or ["ไม่พบผลตรวจสอบคลิป"]))
+    return _orig_publish(video, caption, page_id, token)
 
 
 def _photo_key(url: str) -> str:
@@ -308,6 +404,7 @@ vd.draw_scene = draw_scene
 vd.wrap = _wrap_chars
 vd.fetch_feed = fetch_feed
 vd.validate_news = validate_news
+vd.publish_video = publish_video
 
 
 if __name__ == "__main__":

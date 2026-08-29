@@ -76,15 +76,42 @@ def story_tokens(text: str) -> set[str]:
 
 def complete_phrase(text: str, limit: int) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text:
+        return ""
     if len(text) <= limit:
         cleaned = text
     else:
-        cut = text[:limit].rstrip()
-        cleaned = cut.rsplit(" ", 1)[0] if " " in cut else cut
-    cleaned = cleaned.rstrip(" ,;:-/")
-    while cleaned and THAI_MARK.match(cleaned[-1]):
-        cleaned = cleaned[:-1].rstrip()
-    return cleaned
+        cut = text[:limit]
+        rest = text[limit:]
+        if rest and not cut.endswith(" ") and not rest.startswith(" "):
+            extra = re.match(r"\S{1,12}", rest)
+            if extra and len(cut) + extra.end() <= limit + 12:
+                cleaned = (cut + extra.group(0)).rstrip()
+            else:
+                cleaned = cut.rsplit(" ", 1)[0] if " " in cut else cut.rstrip()
+        else:
+            cleaned = cut.rsplit(" ", 1)[0] if " " in cut.rstrip() else cut.rstrip()
+    return cleaned.rstrip(" ,;:-/")
+
+
+def finish_last_word(short: str, long: str, limit: int) -> str:
+    short = re.sub(r"\s+", " ", str(short or "")).strip()
+    long = re.sub(r"\s+", " ", str(long or "")).strip()
+    if not short:
+        return complete_phrase(long, limit)
+    if long.startswith(short):
+        rest = long[len(short):]
+        if rest and not short.endswith(" ") and not rest[0].isspace():
+            more = re.match(r"\S+", rest)
+            if more:
+                short = short + more.group(0)
+        return complete_phrase(short, limit + 12)
+    last = short.split()[-1]
+    for token in long.split():
+        if token.startswith(last) and len(token) > len(last):
+            rebuilt = short[: short.rfind(last)] + token
+            return complete_phrase(rebuilt, limit + 12)
+    return complete_phrase(short, limit)
 
 
 def first_sentence(text: str, limit: int = 56) -> str:
@@ -124,9 +151,10 @@ def looks_truncated(text: str) -> bool:
         return True
     if text[-1] in ".!ฮ?…":
         return False
-    if THAI_MARK.match(text[-1]):
-        return True
     if text.endswith(("และ", "ที่", "ของ", "ใน", "จะ", "ได้", "ไม่", "กับ", "จาก", "เพื่อ", "ส่วน")):
+        return True
+    last = text.split()[-1] if text.split() else text
+    if 1 <= len(re.sub(r"\s+", "", last)) <= 3 and text[-1] not in ".!ฮ?…":
         return True
     return False
 
@@ -189,13 +217,16 @@ def fallback_storyboard(item):
 
 
 def finalize_storyboard(item, data: dict, limit: int = 64) -> dict:
-    hook = complete_phrase(thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง"), limit)
-    raw_body = thai_or(str(data.get("body") or ""), hook)
-    body = one_story(raw_body) or hook
+    raw_hook = thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง")
+    raw_body = thai_or(str(data.get("body") or ""), raw_hook)
+    body = one_story(raw_body) or raw_hook
+    hook = finish_last_word(complete_phrase(raw_hook, limit), body, limit)
     recap = first_sentence(body, 80) or complete_phrase(body, 80)
+    recap = finish_last_word(recap, body, 80)
     if recap == hook or len(re.sub(r"\s+", "", recap)) < 18:
         extra = complete_phrase(body, 80)
         recap = extra if extra != hook else complete_phrase(hook + " " + body, 80)
+        recap = finish_last_word(recap, body, 80)
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     style = str(data.get("music_style", "comedy")).strip().lower()
     if style not in vd.MUSIC_STYLES:

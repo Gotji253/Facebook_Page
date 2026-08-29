@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenAI first, then Gemini, then Hugging Face router.huggingface.co."""
+"""OpenAI first, then Gemini, then Hugging Face, then Pollinations."""
 from __future__ import annotations
 
 import base64
@@ -12,6 +12,8 @@ from typing import Any
 import requests
 from openai import OpenAI
 
+from pollinations_image import generate_pollinations_image
+
 LOG = logging.getLogger("ai_client")
 EXHAUSTED = (
     "insufficient_quota",
@@ -22,6 +24,9 @@ EXHAUSTED = (
     "resource_exhausted",
     "rate limit",
     "429",
+    "402",
+    "payment required",
+    "depleted your monthly included credits",
 )
 HF_CHAT_MODELS = (
     "HuggingFaceTB/SmolLM3-3B",
@@ -335,7 +340,18 @@ def generate_image_bytes(prompt: str, size: str = "1024x1536") -> bytes:
             errors.append(f"gemini: {exc}")
             LOG.warning("Gemini image failed: %s", exc)
     if hf_token():
-        data = _hf_image(prompt)
-        LOG.info("Image provider=huggingface")
+        try:
+            data = _hf_image(prompt)
+            LOG.info("Image provider=huggingface")
+            return data
+        except Exception as exc:
+            errors.append(f"huggingface: {exc}")
+            LOG.warning("Hugging Face image failed; switching to Pollinations: %s", exc)
+    try:
+        data = generate_pollinations_image(prompt)
+        LOG.info("Image provider=pollinations")
         return data
+    except Exception as exc:
+        errors.append(f"pollinations: {exc}")
+        LOG.warning("Pollinations image failed: %s", exc)
     raise RuntimeError("No image provider available: " + " | ".join(errors))

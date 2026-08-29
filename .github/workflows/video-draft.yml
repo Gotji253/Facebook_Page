@@ -54,12 +54,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python check_gemini.py
 
-      - name: Probe Hugging Face image generation
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_IMAGE_MODEL: Tongyi-MAI/Z-Image-Turbo
-        run: python check_hf_image.py
-
       - name: Create video and post to Facebook
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

@@ -67,6 +67,10 @@ def generate_storyboard(item):
 def generate_scene_images(item, storyboard, output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
     results = []
+    last_bytes = None
+    probe = Path("hf_test.png")
+    if probe.exists():
+        last_bytes = probe.read_bytes()
     for index, scene in enumerate(storyboard["scenes"]):
         if not isinstance(scene, dict):
             scene = {}
@@ -77,10 +81,20 @@ def generate_scene_images(item, storyboard, output_dir: Path):
         }, index)
         LOG.info("Generating AI cartoon image %d/%d", index + 1, vd.SCENE_COUNT)
         image_path = output_dir / f"scene_{index + 1:02d}.png"
-        image_path.write_bytes(generate_image_bytes(prompt, vd.env("OPENAI_IMAGE_SIZE", "1024x1536")))
+        try:
+            data = generate_image_bytes(prompt, vd.env("OPENAI_IMAGE_SIZE", "1024x1536"))
+            last_bytes = data
+            source = "AI-generated"
+        except Exception as exc:
+            if not last_bytes:
+                raise
+            LOG.warning("Image generation failed on scene %s; reusing last frame: %s", index + 1, exc)
+            data = last_bytes
+            source = "reused-last-frame"
+        image_path.write_bytes(data)
         with Image.open(image_path) as check:
             check.verify()
-        results.append({"scene": index + 1, "path": str(image_path), "prompt": prompt, "source": "AI-generated"})
+        results.append({"scene": index + 1, "path": str(image_path), "prompt": prompt, "source": source})
     return results
 
 

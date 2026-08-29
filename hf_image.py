@@ -17,6 +17,7 @@ MODELS = (
     "stabilityai/stable-diffusion-xl-base-1.0",
 )
 PROVIDERS = ("fal-ai", "nscale", "replicate")
+CREDIT_MARKERS = ("402", "payment required", "depleted your monthly included credits", "no credits")
 
 
 def env(name: str, default: str = "") -> str:
@@ -35,6 +36,11 @@ def _to_png_bytes(image) -> bytes:
         image.save(buf, format="PNG")
         return buf.getvalue()
     raise RuntimeError(f"Unexpected image type: {type(image)}")
+
+
+def _credits_gone(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in CREDIT_MARKERS)
 
 
 def generate_hf_image(prompt: str) -> bytes:
@@ -56,4 +62,6 @@ def generate_hf_image(prompt: str) -> bytes:
             except Exception as exc:
                 errors.append(f"{provider}/{model}: {exc}")
                 LOG.warning("Hugging Face image failed %s/%s: %s", provider, model, exc)
+                if _credits_gone(exc):
+                    raise RuntimeError(f"Hugging Face credits exhausted: {exc}") from exc
     raise RuntimeError("Hugging Face image error: " + " | ".join(errors[:8]))

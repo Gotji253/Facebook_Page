@@ -49,11 +49,6 @@ def fallback_storyboard(item):
     hook = "เกิดประเด็นร้อนในวงการลูกหนัง"
     body = "รายละเอียดอยู่ในข่าวต้นทาง ติดตามให้ครบก่อนแชร์"
     return finalize_storyboard(item, {
-        "scenes": [
-            {"title": "เกิดอะไรขึ้น", "line": hook, "narration": hook, "image_prompt": "real photo football news"},
-            {"title": "สรุปสั้น", "line": body, "narration": body, "image_prompt": "real photo football recap"},
-        ],
-        "caption": hook,
         "hook": hook,
         "body": body,
         "cta": "แฟนบอลมองเรื่องนี้ยังไงครับ?",
@@ -65,30 +60,19 @@ def fallback_storyboard(item):
 def finalize_storyboard(item, data: dict) -> dict:
     hook = thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง")[:80]
     body = thai_or(str(data.get("body") or ""), "รายละเอียดอยู่ในข่าวต้นทาง ติดตามให้ครบก่อนแชร์")[:400]
-    recap = first_sentence(body, 90) or hook
+    recap = first_sentence(body, 90) or "สรุปสั้นจากข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
     if recap == hook:
-        recap = thai_or(str(data.get("cta") or ""), "สรุปสั้นจากข่าวต้นทาง อย่าแชร์ก่อนเช็ก")[:90]
-    scenes = [
-        {
-            "title": "เกิดอะไรขึ้น",
-            "line": hook[:90],
-            "narration": hook[:140],
-            "image_prompt": "real football photo scene 1",
-        },
-        {
-            "title": "สรุปสั้น",
-            "line": recap[:90],
-            "narration": body[:140],
-            "image_prompt": "real football photo scene 2",
-        },
-    ]
+        recap = "สรุปสั้นจากข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
+    caption = thai_or(str(data.get("caption") or ""), hook)[:500]
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     style = str(data.get("music_style", "comedy")).strip().lower()
     if style not in vd.MUSIC_STYLES:
         style = "comedy"
-    caption = thai_or(str(data.get("caption") or ""), hook)[:500]
     return {
-        "scenes": scenes,
+        "scenes": [
+            {"title": "เกิดอะไรขึ้น", "line": hook[:90], "narration": hook[:140], "image_prompt": "real football photo 1"},
+            {"title": "สรุปสั้น", "line": recap[:90], "narration": body[:140], "image_prompt": "real football photo 2"},
+        ],
         "caption": caption,
         "hook": hook,
         "body": body,
@@ -157,6 +141,8 @@ def _search_with_title(item, title: str):
 def collect_real_photos(item) -> list[dict]:
     found: list[dict] = []
     seen: set[str] = set()
+    if item.image_url:
+        _add_photo(found, seen, item.image_url, item.image_source or "RSS", item.image_credit)
     for searcher in (search_rss_image, search_wikimedia, search_unsplash, search_openverse, search_reddit):
         try:
             url, source, credit = searcher(item)
@@ -173,65 +159,61 @@ def collect_real_photos(item) -> list[dict]:
         "premier league football action",
     ]
     for query in queries:
-        if len(found) >= 4 or not query.strip():
+        if len(found) >= 6 or not query.strip():
             continue
         for url, source, credit in _search_with_title(item, query.strip()[:180]):
             _add_photo(found, seen, url, source, credit)
-            if len(found) >= 4:
+            if len(found) >= 6:
                 break
     LOG.info("Collected %d real photo candidates", len(found))
     return found
 
 
-def download_photo(url: str, path: Path) -> None:
+def download_photo(url: str, path: Path) -> bytes:
     response = http_get(url)
-    path.write_bytes(response.content)
+    data = response.content
+    path.write_bytes(data)
     with Image.open(path) as check:
         check.verify()
     with Image.open(path) as check:
         if check.size[0] < 400 or check.size[1] < 400:
             raise RuntimeError(f"Photo too small: {check.size} {url}")
+    return data
 
 
 def generate_scene_images(item, storyboard, output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
     photos = collect_real_photos(item)
-    if item.image_url:
-        photos = [{"url": item.image_url, "source": item.image_source or "RSS", "credit": item.image_credit}] + photos
-    unique = []
-    seen = set()
-    for photo in photos:
-        key = re.sub(r"[?#].*$", "", str(photo.get("url") or "")).lower().rstrip("/")
-        if key and key not in seen:
-            seen.add(key)
-            unique.append(photo)
     results = []
+    used_urls = set()
     used_bytes = set()
+    last_error = None
     for index in range(vd.SCENE_COUNT):
         image_path = output_dir / f"scene_{index + 1:02d}.png"
         saved = False
-        last_error = None
-        for photo in unique:
+        for photo in photos:
+            url = str(photo.get("url") or "")
+            if not url or url in used_urls:
+                continue
             try:
-                download_photo(photo["url"], image_path)
-                data = image_path.read_bytes()
+                data = download_photo(url, image_path)
                 if data in used_bytes:
                     continue
+                used_urls.add(url)
                 used_bytes.add(data)
-                unique.remove(photo)
                 results.append({
                     "scene": index + 1,
                     "path": str(image_path),
-                    "prompt": photo["url"],
-                    "source": photo["source"],
+                    "prompt": url,
+                    "source": photo.get("source", "photo"),
                     "credit": photo.get("credit", ""),
                 })
                 saved = True
-                LOG.info("Scene %s photo from %s", index + 1, photo["source"])
+                LOG.info("Scene %s photo from %s", index + 1, photo.get("source"))
                 break
             except Exception as exc:
                 last_error = exc
-                LOG.warning("Skip photo %s: %s", photo.get("url", "")[:80], exc)
+                LOG.warning("Skip photo %s: %s", url[:80], exc)
         if not saved:
             raise RuntimeError(f"Need two different real photos; failed on scene {index + 1}: {last_error}")
     return results

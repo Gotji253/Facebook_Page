@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenAI first, then Gemini, then Hugging Face Serverless Inference."""
+"""OpenAI first, then Gemini, then Hugging Face router.huggingface.co."""
 from __future__ import annotations
 
 import base64
@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import re
-import time
 from typing import Any
 
 import requests
@@ -24,10 +23,18 @@ EXHAUSTED = (
     "rate limit",
     "429",
 )
-DEFAULT_HF_IMAGE_MODELS = (
-    "stabilityai/sdxl-turbo",
+HF_CHAT_MODELS = (
+    "HuggingFaceTB/SmolLM3-3B",
+    "Qwen/Qwen3-4B",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "meta-llama/Llama-3.2-3B-Instruct",
+    "openai/gpt-oss-20b",
+)
+HF_IMAGE_MODELS = (
     "black-forest-labs/FLUX.1-schnell",
-    "stabilityai/stable-diffusion-xl-base-1.0",
+    "black-forest-labs/FLUX.2-klein-4B",
+    "stabilityai/sdxl-turbo",
+    "ByteDance/SDXL-Lightning",
 )
 
 
@@ -37,6 +44,10 @@ def env(name: str, default: str = "") -> str:
 
 def hf_token() -> str:
     return env("HF_TOKEN") or env("HUGGINGFACE_API_TOKEN") or env("HUGGINGFACE_API_KEY")
+
+
+def _hf_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {hf_token()}", "Content-Type": "application/json"}
 
 
 def _text(exc: BaseException) -> str:
@@ -50,13 +61,8 @@ def _text(exc: BaseException) -> str:
     return f"{exc} {body}".lower()
 
 
-def is_exhausted(exc: BaseException) -> bool:
-    text = _text(exc)
-    return any(marker in text for marker in EXHAUSTED)
-
-
 def openai_exhausted(exc: BaseException) -> bool:
-    return is_exhausted(exc)
+    return any(marker in _text(exc) for marker in EXHAUSTED)
 
 
 def _clean_json(raw: str) -> dict[str, Any]:
@@ -99,7 +105,7 @@ def _gemini_chat(system: str, user: str) -> dict[str, Any]:
     key = env("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("GEMINI_API_KEY missing")
-    model = env("GEMINI_MODEL", "gemini-2.5-flash")
+    model = env("GEMINI_MODEL", "gemini-3.6-flash")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {
         "system_instruction": {"parts": [{"text": system}]},
@@ -116,27 +122,59 @@ def _gemini_chat(system: str, user: str) -> dict[str, Any]:
     return _clean_json(text)
 
 
+def _hf_router_models() -> list[str]:
+    try:
+        response = requests.get("https://router.huggingface.co/v1/models", headers=_hf_headers(), timeout=30)
+        if not response.ok:
+            return []
+        items = response.json().get("data") or response.json()
+        if isinstance(items, list):
+            return [str(item.get("id") or item) for item in items if item]
+    except Exception as exc:
+        LOG.warning("Cannot list Hugging Face router models: %s", exc)
+    return []
+
+
+def _hf_chat_models() -> list[str]:
+    custom = env("HF_CHAT_MODEL")
+    available = set(_hf_router_models())
+    ordered = ([custom] if custom else []) + list(HF_CHAT_MODELS)
+    if available:
+        matched = [model for model in ordered if model in available]
+        extras = [model for model in available if any(tag in model.lower() for tag in ("instruct", "chat", "smol", "qwen", "llama", "gpt-oss"))]
+        return list(dict.fromkeys(matched + extras + ordered))
+    return list(dict.fromkeys(ordered))
+
+
 def _hf_chat(system: str, user: str) -> dict[str, Any]:
-    token = hf_token()
-    if not token:
+    if not hf_token():
         raise RuntimeError("HF_TOKEN missing")
-    model = env("HF_CHAT_MODEL", "Qwen/Qwen2.5-7B-Instruct")
-    url = "https://router.huggingface.co/v1/chat/completions"
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system + " Reply with valid JSON only."},
-            {"role": "user", "content": user},
-        ],
-        "max_tokens": 1200,
-        "temperature": 0.4,
-    }
-    response = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=payload, timeout=120)
-    if not response.ok:
-        raise RuntimeError(f"Hugging Face chat error {response.status_code}: {response.text[:400]}")
-    content = (((response.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")
-    LOG.info("Hugging Face chat used model=%s", model)
-    return _clean_json(content)
+    errors: list[str] = []
+    for model in _hf_chat_models()[:8]:
+        try:
+            response = requests.post(
+                "https://router.huggingface.co/v1/chat/completions",
+                headers=_hf_headers(),
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system + " Reply with valid JSON only."},
+                        {"role": "user", "content": user},
+                    ],
+                    "max_tokens": 1200,
+                    "temperature": 0.4,
+                },
+                timeout=120,
+            )
+            if not response.ok:
+                errors.append(f"{model} {response.status_code}: {response.text[:160]}")
+                continue
+            content = (((response.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+            LOG.info("Hugging Face chat used model=%s", model)
+            return _clean_json(content)
+        except Exception as exc:
+            errors.append(f"{model}: {exc}")
+    raise RuntimeError("Hugging Face chat error: " + " | ".join(errors[:5]))
 
 
 def chat_json(system: str, user: str) -> dict[str, Any]:
@@ -207,55 +245,75 @@ def _gemini_image(prompt: str) -> bytes:
 
 
 def _looks_like_image(data: bytes) -> bool:
-    return data[:8] == b"\x89PNG\r\n\x1a\n" or data[:2] == b"\xff\xd8" or data[:4] == b"RIFF"
+    return bool(data) and (data[:8] == b"\x89PNG\r\n\x1a\n" or data[:2] == b"\xff\xd8" or data[:4] == b"RIFF")
+
+
+def _bytes_from_image_payload(payload: Any) -> bytes | None:
+    if isinstance(payload, bytes) and _looks_like_image(payload):
+        return payload
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data") or payload.get("images") or []
+    first = data[0] if isinstance(data, list) and data else payload
+    if isinstance(first, dict):
+        b64 = first.get("b64_json") or first.get("b64") or ""
+        if b64:
+            return base64.b64decode(b64)
+        url = first.get("url") or ""
+        if isinstance(url, str) and url.startswith("http"):
+            return requests.get(url, timeout=90).content
+    return None
 
 
 def _hf_image_models() -> list[str]:
     custom = env("HF_IMAGE_MODEL")
-    if custom:
-        return [custom]
-    return list(DEFAULT_HF_IMAGE_MODELS)
+    available = set(_hf_router_models())
+    ordered = ([custom] if custom else []) + list(HF_IMAGE_MODELS)
+    if available:
+        matched = [model for model in ordered if model in available]
+        extras = [model for model in available if any(tag in model.lower() for tag in ("flux", "sdxl", "image", "schnell"))]
+        return list(dict.fromkeys(matched + extras + ordered))
+    return list(dict.fromkeys(ordered))
 
 
 def _hf_image(prompt: str) -> bytes:
-    token = hf_token()
-    if not token:
+    if not hf_token():
         raise RuntimeError("HF_TOKEN missing")
-    headers = {"Authorization": f"Bearer {token}", "x-wait-for-model": "true"}
-    payload = {
-        "inputs": prompt[:900],
-        "parameters": {
-            "width": 768,
-            "height": 1344,
-            "num_inference_steps": 6,
-            "guidance_scale": 4.5,
-            "negative_prompt": "text, watermark, logo, blurry, photo, low quality",
-        },
-    }
     errors: list[str] = []
-    for model in _hf_image_models():
-        urls = [
-            f"https://router.huggingface.co/hf-inference/models/{model}",
-            f"https://api-inference.huggingface.co/models/{model}",
+    for model in _hf_image_models()[:6]:
+        attempts = [
+            (
+                "https://router.huggingface.co/v1/images/generations",
+                {"model": model, "prompt": prompt[:900], "n": 1, "size": "768x1344"},
+            ),
+            (
+                f"https://router.huggingface.co/hf-inference/models/{model}",
+                {"inputs": prompt[:900], "parameters": {"width": 768, "height": 1344, "num_inference_steps": 4}},
+            ),
         ]
-        for url in urls:
-            for attempt in range(3):
-                response = requests.post(url, headers=headers, json=payload, timeout=180)
-                if response.status_code == 503:
-                    wait = min(20, 4 * (attempt + 1))
-                    LOG.warning("Hugging Face model %s loading; wait %ss", model, wait)
-                    time.sleep(wait)
-                    continue
-                if not response.ok:
-                    errors.append(f"{model} {response.status_code}: {response.text[:160]}")
-                    break
-                data = response.content
-                if data and _looks_like_image(data):
-                    LOG.info("Hugging Face image used model=%s", model)
-                    return data
-                errors.append(f"{model} returned non-image payload")
-                break
-    raise RuntimeError("Hugging Face image error: " + " | ".join(errors[:6]))
+        for url, payload in attempts:
+            try:
+                response = requests.post(url, headers=_hf_headers(), json=payload, timeout=180)
+            except Exception as exc:
+                errors.append(f"{model} {url}: {exc}")
+                continue
+            if not response.ok:
+                errors.append(f"{model} {response.status_code}: {response.text[:160]}")
+                continue
+            content_type = (response.headers.get("content-type") or "").lower()
+            if "image/" in content_type and _looks_like_image(response.content):
+                LOG.info("Hugging Face image used model=%s endpoint=%s", model, url)
+                return response.content
+            try:
+                parsed = response.json()
+            except Exception:
+                parsed = None
+            data = _bytes_from_image_payload(parsed) if parsed is not None else None
+            if data and _looks_like_image(data):
+                LOG.info("Hugging Face image used model=%s endpoint=%s", model, url)
+                return data
+            errors.append(f"{model} returned non-image payload from {url}")
+    raise RuntimeError("Hugging Face image error: " + " | ".join(errors[:8]))
 
 
 def generate_image_bytes(prompt: str, size: str = "1024x1536") -> bytes:

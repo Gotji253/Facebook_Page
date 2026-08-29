@@ -59,11 +59,11 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: gpt-5-mini
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_MODEL: gemini-3.6-flash
           GEMINI_IMAGE_MODEL: gemini-3.1-flash-image
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_CHAT_MODEL: Qwen/Qwen2.5-7B-Instruct
-          HF_IMAGE_MODEL: stabilityai/sdxl-turbo
+          HF_CHAT_MODEL: HuggingFaceTB/SmolLM3-3B
+          HF_IMAGE_MODEL: black-forest-labs/FLUX.1-schnell
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FONT_PATH: ${{ github.workspace }}/fonts/NotoSansThai-Regular.ttf

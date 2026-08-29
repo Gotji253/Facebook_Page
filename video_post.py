@@ -18,29 +18,48 @@ LOG = logging.getLogger("video_post")
 
 
 def fallback_storyboard(item):
+    title = item.title[:90]
+    point = (item.summary or title).strip()[:110]
     return {
         "scenes": [
-            {"title": "ข่าวมาแล้ว", "line": item.title[:110], "narration": "มาดูข่าวฟุตบอลนี้แบบการ์ตูนล้อเลียนกันครับ", "image_prompt": "editorial football caricature, breaking news desk, no text, no logos, no watermark"},
-            {"title": "ประเด็นสำคัญ", "line": "เรื่องนี้ทำให้แฟนบอลต้องหยิบเครื่องคิดเลขขึ้นมา", "narration": "รายละเอียดจริงอยู่ในข่าวต้นทาง ส่วนมุกนี้ทำเพื่อความบันเทิง", "image_prompt": "editorial football caricature, dramatic tactic board, no text, no logos, no watermark"},
-            {"title": "มุมแฟนบอล", "line": "แฟนบอลบอกว่า ขอเวลาตั้งสติก่อนหนึ่งตลาดนักเตะ", "narration": "นี่คือการล้อเลียนแบบสุภาพ ไม่ใช่การกล่าวหาใคร", "image_prompt": "editorial football caricature, comic fans reacting, no text, no logos, no watermark"},
-            {"title": "บทสรุป", "line": "ตรวจสอบข่าวต้นทางก่อนแชร์ แล้วพบกันคลิปหน้า", "narration": "ติดตามข่าวจริงและใช้วิจารณญาณก่อนแชร์ครับ", "image_prompt": "editorial football caricature, calm closing scene, no text, no logos, no watermark"},
+            {
+                "title": "เกิดอะไรขึ้น",
+                "line": title,
+                "narration": title,
+                "image_prompt": "editorial football caricature, breaking news moment, no text, no logos, no watermark",
+            },
+            {
+                "title": "สรุปสั้น",
+                "line": point,
+                "narration": point,
+                "image_prompt": "editorial football caricature, simple recap scene, no text, no logos, no watermark",
+            },
         ],
-        "caption": f"การ์ตูนล้อเลียนข่าวฟุตบอลเพื่อความบันเทิง: {item.title}",
+        "caption": title,
+        "hook": title[:40],
+        "body": point,
+        "cta": "แฟนบอลมองเรื่องนี้ยังไงครับ?",
+        "hashtags": ["#ข่าวฟุตบอล", "#รอบรู้Insight", "#เล่าข่าวสั้น"],
+        "music_style": "comedy",
     }
 
 
 def generate_storyboard(item):
     vd.validate_news(item)
     request = {
-        "title": item.title[:300],
-        "summary": item.summary[:1400],
+        "title": item.title[:180],
+        "summary": item.summary[:280],
         "source": item.source,
-        "source_url": item.url,
-        "instruction": "ตอบเป็น JSON มี scenes 4 ฉากและ caption แต่ละฉากมี title line narration image_prompt",
+        "instruction": (
+            "ตอบ JSON สั้นมาก มี scenes 2 ฉาก, caption, hook, body, cta, hashtags, music_style. "
+            "ฉาก 1 สรุปว่าเกิดอะไรขึ้น ฉาก 2 สรุปประเด็นที่ต้องรู้ ภาษาไทยเข้าใจง่าย ไม่เกิน 18 คำต่อบรรทัด. "
+            "music_style ต้องเป็น hype, triumph, tense, comedy หรือ calm. "
+            "image_prompt ภาษาอังกฤษสั้น ไม่มีตัวอักษรในภาพ"
+        ),
     }
     try:
         data = chat_json(
-            "คุณเป็นบรรณาธิการข่าวฟุตบอล ตอบ JSON เท่านั้น",
+            "บรรณาธิการข่าวฟุตบอล ตอบ JSON สั้นเท่านั้น",
             json.dumps(request, ensure_ascii=False),
         )
     except Exception as exc:
@@ -54,14 +73,26 @@ def generate_storyboard(item):
         for scene in scenes[: vd.SCENE_COUNT]:
             if isinstance(scene, dict):
                 clean.append({
-                    "title": str(scene.get("title", "ฉากข่าวฟุตบอล"))[:70],
-                    "line": str(scene.get("line", "ติดตามข่าวฟุตบอลแบบเข้าใจง่าย"))[:110],
-                    "narration": str(scene.get("narration", "นี่คือการ์ตูนล้อเลียนเพื่อความบันเทิง"))[:320],
-                    "image_prompt": str(scene.get("image_prompt", "editorial football caricature, no text, no logos, no watermark"))[:1200],
+                    "title": str(scene.get("title", "สรุปข่าว"))[:40],
+                    "line": str(scene.get("line", item.title))[:90],
+                    "narration": str(scene.get("narration", scene.get("line", item.title)))[:140],
+                    "image_prompt": str(scene.get("image_prompt", "editorial football caricature, no text, no logos"))[:280],
                 })
     if len(clean) != vd.SCENE_COUNT:
         return fallback_storyboard(item)
-    return {"scenes": clean, "caption": str(data.get("caption", item.title))[:1800]}
+    tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
+    style = str(data.get("music_style", "comedy")).strip().lower()
+    if style not in vd.MUSIC_STYLES:
+        style = "comedy"
+    return {
+        "scenes": clean,
+        "caption": str(data.get("caption") or data.get("hook") or item.title)[:500],
+        "hook": str(data.get("hook") or clean[0]["line"])[:80],
+        "body": str(data.get("body") or clean[1]["line"])[:400],
+        "cta": str(data.get("cta") or "แฟนบอลมองเรื่องนี้ยังไงครับ?")[:120],
+        "hashtags": [str(tag).strip()[:40] for tag in tags if str(tag).strip()][:5] or ["#ข่าวฟุตบอล", "#รอบรู้Insight", "#เล่าข่าวสั้น"],
+        "music_style": style,
+    }
 
 
 def generate_scene_images(item, storyboard, output_dir: Path):
@@ -82,7 +113,7 @@ def generate_scene_images(item, storyboard, output_dir: Path):
         LOG.info("Generating AI cartoon image %d/%d", index + 1, vd.SCENE_COUNT)
         image_path = output_dir / f"scene_{index + 1:02d}.png"
         try:
-            data = generate_image_bytes(prompt, vd.env("OPENAI_IMAGE_SIZE", "1024x1536"))
+            data = generate_image_bytes(prompt, vd.env("OPENAI_IMAGE_SIZE", "768x1344"))
             last_bytes = data
             source = "AI-generated"
         except Exception as exc:
@@ -99,12 +130,10 @@ def generate_scene_images(item, storyboard, output_dir: Path):
 
 
 def make_image_prompt(item, scene, scene_index: int) -> str:
-    extra = scene.get("image_prompt", "editorial football caricature, no text, no logos, no watermark") if isinstance(scene, dict) else "editorial football caricature, no text, no logos, no watermark"
+    extra = scene.get("image_prompt", "editorial football caricature, no text") if isinstance(scene, dict) else "editorial football caricature, no text"
     return (
-        "Create a vertical 9:16 editorial cartoon illustration for a Thai football news parody video. "
-        "Keep the main character in the upper two-thirds of the frame with clear headroom at the bottom for captions. "
-        "Use fictionalized non-photorealistic footballer caricatures. No logos, readable text, or watermarks. "
-        f"Article context: {item.title[:240]}. Scene {scene_index + 1}: {extra}"
+        "Vertical 9:16 editorial football caricature, no text, no logos, no watermark. "
+        f"News: {item.title[:120]}. Scene {scene_index + 1}: {extra[:220]}"
     )
 
 

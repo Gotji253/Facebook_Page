@@ -47,6 +47,11 @@ jobs:
           test -n "$FB_PAGE_ID" || { echo "Missing FB_PAGE_ID secret"; exit 1; }
           test -n "$FB_PAGE_TOKEN" || { echo "Missing FB_PAGE_TOKEN secret"; exit 1; }
 
+      - name: Probe Gemini API key
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python check_gemini.py
+
       - name: Create video and post to Facebook
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

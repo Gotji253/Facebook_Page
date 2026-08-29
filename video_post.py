@@ -8,7 +8,7 @@ import re
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 import ai_client
 import video_draft as vd
@@ -235,7 +235,7 @@ def generate_storyboard(item):
         "instruction": (
             "ตอบ JSON สั้น มี hook, body, cta, hashtags, music_style. "
             "hook และ body ต้องเป็นภาษาไทยล้วน และต้องเล่าเรื่องเดียวกันเท่านั้น. "
-            "ห้ามเย็ดข่าวซุบซิบหรือข่าวหลายเรื่องใน body. "
+            "ห้ามยัดข่าวซุบซิบหรือข่าวหลายเรื่องใน body. "
             "hook ไม่เกิน 12 คำ body 1 ประโยคสั้นของเรื่องเดียวกัน. "
             "music_style เป็น hype, triumph, tense, comedy หรือ calm"
         ),
@@ -336,6 +336,10 @@ def _photo_key(url: str) -> str:
 
 def _looks_like_photo(url: str) -> bool:
     lowered = url.lower()
+    if any(host in lowered for host in ("pollinations.ai", "openverse.org", "wikimedia.org", "bbci.co.uk")):
+        if any(bad in lowered for bad in (".pdf", ".svg", ".tif", ".tiff", ".gif", "tiny_town")):
+            return False
+        return True
     if any(bad in lowered for bad in (".pdf", ".svg", ".tif", ".tiff", ".gif", "tiny_town")):
         return False
     return bool(IMAGE_EXT_RE.search(url))
@@ -373,6 +377,17 @@ def search_wikipedia_thumbs(query: str):
             yield source, "Wikipedia", page.get("title", query)
 
 
+def search_openverse(query: str):
+    response = http_get(
+        "https://api.openverse.org/v1/images/",
+        params={"q": f"{query} football", "page_size": 8},
+    )
+    for row in response.json().get("results") or []:
+        url = row.get("url") or ""
+        if url:
+            yield url, "Openverse", row.get("title") or query
+
+
 def collect_real_photos(item) -> list[dict]:
     found: list[dict] = []
     seen: set[str] = set()
@@ -399,6 +414,23 @@ def collect_real_photos(item) -> list[dict]:
                 _add_photo(found, seen, url, source, credit)
         except Exception as exc:
             LOG.warning("Wikipedia thumb search failed (%s): %s", query[:40], exc)
+    if len(found) < 4:
+        for query in ("football match", "soccer stadium", "premier league trophy"):
+            try:
+                for url, source, credit in search_openverse(query):
+                    _add_photo(found, seen, url, source, credit)
+            except Exception as exc:
+                LOG.warning("Openverse search failed (%s): %s", query, exc)
+    _add_photo(
+        found, seen,
+        "https://image.pollinations.ai/prompt/real%20photo%20football%20match%20stadium?width=1080&height=1920&nologo=true",
+        "Pollinations", "football match",
+    )
+    _add_photo(
+        found, seen,
+        "https://image.pollinations.ai/prompt/real%20photo%20football%20player%20celebration?width=1080&height=1920&nologo=true",
+        "Pollinations", "football player",
+    )
     LOG.info("Collected %d real photo candidates", len(found))
     return found
 
@@ -445,6 +477,18 @@ def generate_scene_images(item, storyboard, output_dir: Path):
             except Exception as exc:
                 last_error = exc
                 LOG.warning("Skip photo %s: %s", url[:90], exc)
+        if not saved and results:
+            alt = ImageOps.mirror(Image.open(results[0]["path"]).convert("RGB"))
+            alt.save(image_path, format="JPEG", quality=82, optimize=True)
+            results.append({
+                "scene": index + 1,
+                "path": str(image_path),
+                "prompt": results[0]["prompt"],
+                "source": "rss-alt",
+                "credit": results[0].get("credit", ""),
+            })
+            saved = True
+            LOG.warning("Scene %s used mirrored fallback photo", index + 1)
         if not saved:
             raise RuntimeError(f"Need two different real photos; failed on scene {index + 1}: {last_error}")
     return results

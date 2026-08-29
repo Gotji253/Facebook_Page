@@ -15,7 +15,7 @@ concurrency:
 jobs:
   create-draft:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,14 +40,16 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
         run: |
-          if [ -z "$OPENAI_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then echo "Need OPENAI_API_KEY or GEMINI_API_KEY"; exit 1; fi
+          if [ -z "$OPENAI_API_KEY" ] && [ -z "$GEMINI_API_KEY" ] && [ -z "$HF_TOKEN" ]; then echo "Need OPENAI_API_KEY or GEMINI_API_KEY or HF_TOKEN"; exit 1; fi
           test -n "$FB_PAGE_ID" || { echo "Missing FB_PAGE_ID secret"; exit 1; }
           test -n "$FB_PAGE_TOKEN" || { echo "Missing FB_PAGE_TOKEN secret"; exit 1; }
 
       - name: Probe Gemini API key
+        continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python check_gemini.py
@@ -59,6 +61,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-2.5-flash
           GEMINI_IMAGE_MODEL: gemini-3.1-flash-image
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_CHAT_MODEL: Qwen/Qwen2.5-7B-Instruct
+          HF_IMAGE_MODEL: stabilityai/sdxl-turbo
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FONT_PATH: ${{ github.workspace }}/fonts/NotoSansThai-Regular.ttf

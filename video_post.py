@@ -23,13 +23,18 @@ THAI_MARK = re.compile(r"[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]")
 IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp)(?:$|\?)", re.I)
 SCORE_RE = re.compile(r"\b\d{1,2}\s*[-\u2013]\s*\d{1,2}\b")
 NAME_RE = re.compile(r"\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b")
+STORY_SPLIT = re.compile(r"\s*(?:นอกจากนี้|ในขณะเดียวกัน|ส่วน(?=[ก-ฮ])|meanwhile|separately)\s+", re.I)
 MAX_PHOTO_BYTES = 4_000_000
 SCENE_LABELS = {"สรุปสั้น", "สรุปข่าว", "สรุปข่าวสั้น"}
+STOP_TOKENS = {
+    "เกิดอะไรขึ้น", "นอกจากนี้", "อย่าง", "ใกล้ชิด", "สนใจ", "สถานการณ์",
+    "ของ", "และ", "ที่", "ใน", "จะ", "ได้", "ไม่", "กับ", "จาก", "เพื่อ", "ส่วน", "ยัง",
+}
 SKIP_NEWS = (
     "quiz", "quizzes", "puzzle", "crossword", "podcast", "newsletter",
     "fantasy football", "predictor", "prediction game", "daily quiz",
     "flex your football", "test your", "brain teaser", "trivia",
-    "live text", "as it happened", "gossip",
+    "live text", "as it happened", "gossip", "rumour mill", "transfer rumours",
 )
 KEEP_NEWS = (
     "football", "soccer", "premier league", "la liga", "bundesliga", "serie a",
@@ -57,6 +62,16 @@ def is_football_news(item) -> bool:
     if any(word in text for word in SKIP_NEWS):
         return False
     return any(word in text for word in KEEP_NEWS)
+
+
+def one_story(text: str) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    return STORY_SPLIT.split(text, maxsplit=1)[0].strip(" ,.")
+
+
+def story_tokens(text: str) -> set[str]:
+    found = set(re.findall(r"[\u0E00-\u0E7F]{3,}|[A-Za-z]{4,}", text or ""))
+    return {token.lower() for token in found if token not in STOP_TOKENS}
 
 
 def complete_phrase(text: str, limit: int) -> str:
@@ -87,6 +102,12 @@ def thai_or(text: str, fallback: str) -> str:
 
 def scene_visible(scene: dict) -> str:
     return " ".join(str(scene.get(key) or "").strip() for key in ("title", "line")).strip()
+
+
+def same_story(scene1: str, scene2: str) -> bool:
+    left = story_tokens(scene1)
+    right = story_tokens(scene2)
+    return bool(left and right and (left & right))
 
 
 def tidy_wrap_lines(lines: list[str]) -> list[str]:
@@ -138,6 +159,8 @@ def review_on_screen_text(item, storyboard: dict) -> dict:
         errors.append("ข้อความฉาก 1 ถูกตัดกลาง")
     if looks_truncated(str(scenes[1].get("title") or "") or str(scenes[1].get("line") or "")):
         errors.append("ข้อความฉาก 2 ถูกตัดกลาง")
+    if not same_story(s1, s2):
+        errors.append("ฉาก 1 กับฉาก 2 ไม่ใช่ข่าวเดียวกัน")
     source = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}"
     clip = f"{hook} {body} {s1} {s2}"
     for score in SCORE_RE.findall(source):
@@ -170,10 +193,11 @@ def fallback_storyboard(item):
 
 def finalize_storyboard(item, data: dict, limit: int = 56) -> dict:
     hook = complete_phrase(thai_or(str(data.get("hook") or ""), "เกิดประเด็นร้อนในวงการลูกหนัง"), limit)
-    body = thai_or(str(data.get("body") or ""), "รายละเอียดอยู่ในข่าวต้นทาง ติดตามให้ครบก่อนแชร์")[:400]
-    recap = first_sentence(body, limit) or "รายละเอียดอยู่ในข่าวต้นทาง อย่าแชร์ก่อนเช็ก"
-    if recap == hook:
-        recap = first_sentence(body[len(hook):].strip() or body, limit) or recap
+    raw_body = thai_or(str(data.get("body") or ""), hook)
+    body = one_story(raw_body) or hook
+    recap = first_sentence(body, limit) or hook
+    if not same_story("เกิดอะไรขึ้น " + hook, recap):
+        recap = complete_phrase("ประเด็นหลักคือ " + hook, limit)
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     style = str(data.get("music_style", "comedy")).strip().lower()
     if style not in vd.MUSIC_STYLES:
@@ -191,7 +215,7 @@ def finalize_storyboard(item, data: dict, limit: int = 56) -> dict:
         "music_style": style,
         "_source_data": {
             "hook": str(data.get("hook") or ""),
-            "body": str(data.get("body") or ""),
+            "body": str(data.get("body") or hook),
             "cta": str(data.get("cta") or ""),
             "hashtags": tags,
             "music_style": style,
@@ -210,8 +234,9 @@ def generate_storyboard(item):
         "source": item.source,
         "instruction": (
             "ตอบ JSON สั้น มี hook, body, cta, hashtags, music_style. "
-            "hook และ body ต้องเป็นภาษาไทยล้วน ห้ามคัดลอกหัวข้ออังกฤษ. "
-            "hook ไม่เกิน 12 คำ จบคำให้ครบ ห้ามตัดกลาง. body 1 ประโยคสั้น. "
+            "hook และ body ต้องเป็นภาษาไทยล้วน และต้องเล่าเรื่องเดียวกันเท่านั้น. "
+            "ห้ามเย็ดข่าวซุบซิบหรือข่าวหลายเรื่องใน body. "
+            "hook ไม่เกิน 12 คำ body 1 ประโยคสั้นของเรื่องเดียวกัน. "
             "music_style เป็น hype, triumph, tense, comedy หรือ calm"
         ),
     }
@@ -231,8 +256,10 @@ def generate_storyboard(item):
         data = board.get("_source_data") or data
     review = review_on_screen_text(item, board)
     if not review["ok"]:
-        LOG.warning("Clip text failed first review, shortening: %s", review["errors"])
-        board = finalize_storyboard(item, data or board.get("_source_data") or {}, 42)
+        LOG.warning("Clip text failed first review, rewriting same-story recap: %s", review["errors"])
+        data = dict(data or board.get("_source_data") or {})
+        data["body"] = data.get("hook") or board.get("hook")
+        board = finalize_storyboard(item, data, 42)
         review = review_on_screen_text(item, board)
     board["clip_review"] = review
     vd._clip_review = review
@@ -246,7 +273,6 @@ def _wrap_chars(draw, text: str, font, width: int):
     if not text:
         return []
     lines, current = [], ""
-    remain = text
     for index, char in enumerate(text):
         remain = text[index + 1:]
         candidate = current + char

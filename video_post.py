@@ -47,6 +47,66 @@ GENERIC_FALLBACK = (
     "เกิดประเด็นร้อนในวงการลูกหนัง",
     "รายละเอียดอยู่ในข่าวต้นทาง",
 )
+NAME_SKIP = {
+    "The", "And", "For", "With", "From", "This", "That", "After", "Before",
+    "Against", "Premier", "League", "United", "City", "News", "Sport",
+    "Football", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday",
+    "Thursday", "Friday", "Live", "Watch", "How", "Why", "What", "When",
+}
+CLUB_MAP = {
+    "tottenham": "Tottenham Hotspur",
+    "spurs": "Tottenham Hotspur",
+    "hotspur": "Tottenham Hotspur",
+    "สเปอร์ส": "Tottenham Hotspur",
+    "ไก่เดือยทอง": "Tottenham Hotspur",
+    "newcastle": "Newcastle United",
+    "นิวคาส": "Newcastle United",
+    "สาลิกาดง": "Newcastle United",
+    "liverpool": "Liverpool F.C.",
+    "ลิเวอร์พูล": "Liverpool F.C.",
+    "arsenal": "Arsenal F.C.",
+    "อาร์เซนอล": "Arsenal F.C.",
+    "chelsea": "Chelsea F.C.",
+    "เชลซี": "Chelsea F.C.",
+    "manchester city": "Manchester City",
+    "man city": "Manchester City",
+    "แมนซิตี้": "Manchester City",
+    "manchester united": "Manchester United",
+    "man united": "Manchester United",
+    "แมนยู": "Manchester United",
+    "barcelona": "FC Barcelona",
+    "บาร์ซา": "FC Barcelona",
+    "บาร์เซโลนา": "FC Barcelona",
+    "real madrid": "Real Madrid",
+    "เรอัลมาดริด": "Real Madrid",
+    "bayern": "Bayern Munich",
+    "บาเยิร์น": "Bayern Munich",
+    "psg": "Paris Saint-Germain",
+    "เปแอสเช": "Paris Saint-Germain",
+    "milan": "AC Milan",
+    "มิลาน": "AC Milan",
+    "inter": "Inter Milan",
+    "อินเตอร์": "Inter Milan",
+    "juventus": "Juventus",
+    "ยูเวนตุส": "Juventus",
+    "dortmund": "Borussia Dortmund",
+    "ดอร์ทมุนด์": "Borussia Dortmund",
+    "atletico": "Atletico Madrid",
+    "แอตเลติโก": "Atletico Madrid",
+    "west ham": "West Ham United",
+    "เวสต์แฮม": "West Ham United",
+    "aston villa": "Aston Villa",
+    "แอสตันวิลลา": "Aston Villa",
+    "brighton": "Brighton & Hove Albion",
+    "ไบรท์ตัน": "Brighton & Hove Albion",
+    "everton": "Everton F.C.",
+    "เอฟเวอร์ตัน": "Everton F.C.",
+}
+THAI_BREAKS = (
+    "ขณะที่", "ทำให้", "พร้อม", "เพราะ", "หลังจาก", "ก่อนที่",
+    "โดยที่", "แต่", "โดย", "และ", "กับ", "จาก", "ของ", "ที่",
+    "ใน", "เพื่อ", "จน", "เลย", "ยัง", "จะ", "ได้", "ไม่", "กว่า",
+)
 
 
 def has_thai(text: str) -> bool:
@@ -200,6 +260,64 @@ def thai_or(text: str, fallback: str) -> str:
     return text if has_thai(text) else fallback
 
 
+def readable_thai(text: str) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text:
+        return ""
+    compact = re.sub(r"\s+", "", text)
+    if compact and (len(text) - len(compact)) >= max(3, len(compact) // 10):
+        return text
+    spaced = text
+    for word in THAI_BREAKS:
+        spaced = re.sub(rf"(?<!\s)({re.escape(word)})(?!\s)", r" \1 ", spaced)
+    return re.sub(r"\s+", " ", spaced).strip()
+
+
+def news_names(item) -> list[str]:
+    blob = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}"
+    names = []
+    for name in NAME_RE.findall(blob):
+        first = name.split()[0]
+        if first in NAME_SKIP or name in names:
+            continue
+        names.append(name)
+    return names[:4]
+
+
+def news_clubs(item) -> list[str]:
+    blob = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}".lower()
+    clubs = []
+    for key, club in sorted(CLUB_MAP.items(), key=lambda row: len(row[0]), reverse=True):
+        if key in blob and club not in clubs:
+            clubs.append(club)
+    return clubs[:3]
+
+
+def photo_queries(item) -> list[str]:
+    names = news_names(item)
+    clubs = news_clubs(item)
+    queries: list[str] = []
+    for name in names:
+        queries.append(f"{name} footballer")
+        queries.append(f"{name} football")
+        for club in clubs[:2]:
+            queries.append(f"{name} {club}")
+    for club in clubs:
+        queries.append(f"{club} F.C.")
+        queries.append(f"{club} football club")
+    words = [word for word in re.findall(r"[A-Za-z][A-Za-z'\-]{2,}", f"{item.title} {item.summary}") if word not in NAME_SKIP]
+    if words:
+        queries.append(" ".join(words[:4]) + " football")
+    seen: set[str] = set()
+    unique = []
+    for query in queries:
+        key = query.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(query)
+    return unique[:10]
+
+
 def scene_visible(scene: dict) -> str:
     return " ".join(str(scene.get(key) or "").strip() for key in ("title", "line")).strip()
 
@@ -267,8 +385,7 @@ def review_on_screen_text(item, storyboard: dict) -> dict:
         compact = re.sub(r"\s+", "", score)
         if compact not in re.sub(r"\s+", "", clip) and score not in clip:
             errors.append(f"สกอร์ในข่าวต้นทางคือ {score} แต่ไม่อยู่บนคลิป")
-    skip_names = {"The", "And", "For", "With", "From", "This", "That", "After", "Before", "Against", "Premier", "League", "United", "City", "News", "Sport", "Football", "Saturday"}
-    names = [name for name in NAME_RE.findall(getattr(item, "title", "") or "") if name.split()[0] not in skip_names]
+    names = news_names(item)
     if names and not any(name.split()[-1].lower() in clip.lower() for name in names[:3]):
         warnings.append("ชื่อในหัวข้อข่าวไม่ขึ้นบนข้อความคลิป")
     if any(phrase in clip for phrase in GENERIC_FALLBACK) and len(getattr(item, "title", "") or "") > 20:
@@ -296,15 +413,21 @@ def finalize_storyboard(item, data: dict, limit: int = 110) -> dict:
     raw_body = thai_or(str(data.get("body") or ""), raw_hook)
     body = one_story(raw_body) or raw_hook
     scores = source_scores(item)
-    hook = finish_phrase(complete_phrase(raw_hook, limit), body, limit)
+    hook = readable_thai(finish_phrase(complete_phrase(raw_hook, limit), body, limit))
     hook = with_score(hook, scores, limit)
-    recap = first_sentence(body, 140) or complete_phrase(body, 140)
+    recap = readable_thai(first_sentence(body, 140) or complete_phrase(body, 140))
     recap = finish_phrase(recap, body, 140)
-    if recap == hook or len(re.sub(r"\s+", "", recap)) < 18:
-        extra = complete_phrase(body, 140)
-        recap = extra if extra != hook else complete_phrase(hook + " " + body, 140)
+    hook_key = re.sub(r"\s+", "", hook)
+    recap_key = re.sub(r"\s+", "", recap)
+    if recap_key == hook_key or recap_key.startswith(hook_key) or len(recap_key) < 18:
+        rest = body
+        if hook and hook in body:
+            rest = body.split(hook, 1)[-1]
+        extra = readable_thai(complete_phrase(rest or body, 140))
+        recap = extra if re.sub(r"\s+", "", extra) != hook_key else readable_thai(complete_phrase(body, 140))
         recap = finish_phrase(recap, body, 140)
-    recap = with_score(recap, scores, 140)
+    recap = readable_thai(with_score(recap, scores, 140))
+    hook = readable_thai(hook)
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     style = str(data.get("music_style", "comedy")).strip().lower()
     if style not in vd.MUSIC_STYLES:
@@ -343,7 +466,8 @@ def generate_storyboard(item):
             "ตอบ JSON สั้น มี hook, body, cta, hashtags, music_style. "
             "hook และ body ต้องเป็นภาษาไทยล้วน และต้องเล่าเรื่องเดียวกันเท่านั้น. "
             "ห้ามยัดข่าวซุบซิบหรือข่าวหลายเรื่องใน body. "
-            "hook 1 ประโยค 16-22 คำ body 1-2 ประโยคของเรื่องเดียวกัน ต้องมีเหตุผลสั้นๆ. "
+            "hook 1 ประโยค 16-22 คำ เว้นวรรคทุกคำ อ่านง่าย. "
+            "body คนละประโยคกับ hook ต้องมีเหตุผลสั้นๆ และเว้นวรรคทุกคำ. "
             "music_style เป็น hype, triumph, tense, comedy หรือ calm"
         ),
     }
@@ -387,6 +511,8 @@ def draw_scene(base, scene, scene_index, font_path):
     if title in SCENE_LABELS:
         scene["title"] = str(scene.get("line") or "")
         scene["line"] = ""
+    scene["title"] = readable_thai(scene.get("title") or "")
+    scene["line"] = readable_thai(scene.get("line") or "")
     return _orig_draw(base, scene, scene_index, font_path)
 
 
@@ -453,10 +579,15 @@ def search_wikipedia_thumbs(query: str):
         },
     )
     pages = (response.json().get("query") or {}).get("pages") or {}
+    tokens = [token.lower() for token in re.findall(r"[A-Za-z0-9]{3,}", query)]
+    sport_words = ("football", "soccer", "f.c", "fc ", "club", "stadium", "manager", "player")
     for page in pages.values():
         source = (page.get("thumbnail") or {}).get("source") or ""
         title = str(page.get("title") or "").lower()
-        if source and any(word in title for word in ("football", "soccer", "f.c", "fc ", "club", "stadium")):
+        if not source:
+            continue
+        titled = any(word in title for word in sport_words) or any(token in title for token in tokens)
+        if titled:
             yield source, "Wikipedia", page.get("title", query)
 
 
@@ -481,14 +612,8 @@ def collect_real_photos(item) -> list[dict]:
         _add_photo(found, seen, url, source, credit)
     except Exception as exc:
         LOG.warning("RSS photo search failed: %s", exc)
-    words = re.findall(r"[A-Za-z0-9\-']+", f"{item.title} {item.summary}")
-    queries = [
-        " ".join(words[:4]) + " football",
-        " ".join(words[:2]) + " football club",
-        "Premier League football match",
-        "Champions League football",
-        "association football player portrait",
-    ]
+    queries = photo_queries(item)
+    LOG.info("Photo queries: %s", queries[:6])
     for query in queries:
         if len(found) >= 8:
             break
@@ -498,21 +623,23 @@ def collect_real_photos(item) -> list[dict]:
         except Exception as exc:
             LOG.warning("Wikipedia thumb search failed (%s): %s", query[:40], exc)
     if len(found) < 4:
-        for query in ("football match", "soccer stadium", "premier league trophy"):
+        for query in queries[:4] or ("football match",):
             try:
                 for url, source, credit in search_openverse(query):
                     _add_photo(found, seen, url, source, credit)
             except Exception as exc:
                 LOG.warning("Openverse search failed (%s): %s", query, exc)
+    topic = " ".join(queries[:2]) or "football player club"
+    encoded = re.sub(r"[^A-Za-z0-9]+", "%20", topic)[:120]
     _add_photo(
         found, seen,
-        "https://image.pollinations.ai/prompt/real%20photo%20football%20match%20stadium?width=1080&height=1920&nologo=true",
-        "Pollinations", "football match",
+        f"https://image.pollinations.ai/prompt/real%20photo%20{encoded}%20football?width=1080&height=1920&nologo=true",
+        "Pollinations", topic,
     )
     _add_photo(
         found, seen,
-        "https://image.pollinations.ai/prompt/real%20photo%20football%20player%20celebration?width=1080&height=1920&nologo=true",
-        "Pollinations", "football player",
+        f"https://image.pollinations.ai/prompt/real%20photo%20{encoded}%20football%20club?width=1080&height=1920&nologo=true",
+        "Pollinations", topic,
     )
     LOG.info("Collected %d real photo candidates", len(found))
     return found

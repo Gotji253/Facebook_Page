@@ -21,9 +21,10 @@ from football_poster import DEFAULT_FEEDS, NewsItem, fetch_feed, find_related_im
 LOG = logging.getLogger("video_draft")
 W, H = 1080, 1920
 FPS, DURATION, SCENE_COUNT = 30, 15, 4
-TEXT_MAX_WIDTH = 900
-BOX_PAD_X = 56
-BOX_PAD_Y = 28
+BOX_PAD_X = 48
+BOX_PAD_Y = 26
+BOX_TOP_MIN = 1080
+BOX_BOTTOM_MAX = 1810
 
 
 def env(name: str, default: str = "") -> str:
@@ -38,15 +39,26 @@ def load_font(path: str, size: int):
 
 
 def wrap(draw, text: str, font, width: int) -> list[str]:
-    lines, current = [], ""
-    for word in text.split():
-        candidate = f"{current} {word}".strip()
-        if current and draw.textbbox((0, 0), candidate, font=font)[2] > width:
-            lines.append(current)
-            current = word
-        else:
+    """Wrap Thai and English so a line never exceeds width."""
+    text = " ".join(str(text).split())
+    if not text:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for char in text:
+        candidate = current + char
+        if draw.textbbox((0, 0), candidate, font=font)[2] <= width:
             current = candidate
-    return lines + ([current] if current else []) or [text]
+            continue
+        if current.strip():
+            lines.append(current.strip())
+            current = "" if char == " " else char
+            continue
+        lines.append(char)
+        current = ""
+    if current.strip():
+        lines.append(current.strip())
+    return lines or [text]
 
 
 def validate_news(item: NewsItem) -> None:
@@ -80,6 +92,7 @@ def generate_storyboard(item: NewsItem) -> dict[str, object]:
         "instruction": (
             "ตอบเป็น valid JSON เท่านั้น โดยมี scenes จำนวน 4 ฉากและ caption. "
             "แต่ละ scene ต้องมี title, line, narration และ image_prompt. "
+            "title สั้นไม่เกิน 18 คำ line สั้นไม่เกิน 28 คำ. "
             "สรุปข่าวให้ผู้ชมเข้าใจง่าย ใช้มุกตลกภาษาไทยแบบสุภาพและระบุว่าเป็นการล้อเลียน. "
             "ห้ามเติมข้อเท็จจริง ตัวเลข หรือข้อกล่าวหาที่ไม่มีในข่าว. "
             "image_prompt ต้องเป็นภาษาอังกฤษสำหรับภาพการ์ตูนบรรณาธิการแนวเสียดสีฟุตบอล "
@@ -165,24 +178,15 @@ def prepare_scene(image_path: Path) -> Image.Image:
     return image.filter(ImageFilter.EDGE_ENHANCE)
 
 
-def _fit_text(draw, text: str, font_path: str, max_size: int, min_size: int, max_width: int, max_lines: int):
-    size = max_size
-    while size >= min_size:
-        font = load_font(font_path, size)
-        lines = wrap(draw, text, font, max_width)
-        too_wide = any(draw.textbbox((0, 0), line, font=font)[2] > max_width for line in lines)
-        if len(lines) <= max_lines and not too_wide:
-            return font, lines, max(int(size * 1.16), size + 10)
-        size -= 4
-    font = load_font(font_path, min_size)
-    return font, wrap(draw, text, font, max_width)[:max_lines], min_size + 10
+def _measure(draw, text: str, font, width: int) -> list[str]:
+    return wrap(draw, text, font, width)
 
 
 def _draw_centered_lines(draw, lines: list[str], font, y: int, fill, line_height: int, box_left: int, box_right: int) -> int:
     max_width = box_right - box_left
     for line in lines:
         box = draw.textbbox((0, 0), line, font=font)
-        text_w = box[2] - box[0]
+        text_w = min(box[2] - box[0], max_width)
         x = box_left + max(0, (max_width - text_w) // 2)
         draw.text((x + 2, y + 3), line, font=font, fill=(0, 0, 0, 200), stroke_width=3, stroke_fill=(0, 0, 0, 210))
         draw.text((x, y), line, font=font, fill=fill, stroke_width=2, stroke_fill=(0, 0, 0, 230))
@@ -198,47 +202,59 @@ def draw_scene(base: Image.Image, scene: dict[str, str], scene_index: int, font_
     top = max(0, int(crop_h * 0.02))
     frame = frame.crop((left, top, left + crop_w, min(H, top + crop_h))).resize((W, H), Image.Resampling.LANCZOS)
 
-    box_top = 1180
-    box_bottom = 1788
-    box_left = 40
-    box_right = W - 40
+    box_left, box_right = 40, W - 40
     inner_left = box_left + BOX_PAD_X
     inner_right = box_right - BOX_PAD_X
     inner_width = inner_right - inner_left
+    probe = ImageDraw.Draw(Image.new("RGBA", (W, H)))
+
+    hook_size, summary_size = 64, 44
+    hook_font = load_font(font_path, hook_size)
+    summary_font = load_font(font_path, summary_size)
+    hook_lines = _measure(probe, scene["title"], hook_font, inner_width)
+    summary_lines = _measure(probe, scene["line"], summary_font, inner_width)
+    hook_gap = hook_size + 12
+    summary_gap = summary_size + 10
+    brand_h = 42
+    content_h = BOX_PAD_Y + brand_h + (len(hook_lines) * hook_gap) + 12 + (len(summary_lines) * summary_gap) + BOX_PAD_Y
+
+    while content_h > (BOX_BOTTOM_MAX - BOX_TOP_MIN) and hook_size > 40:
+        hook_size -= 4
+        summary_size = max(28, summary_size - 3)
+        hook_font = load_font(font_path, hook_size)
+        summary_font = load_font(font_path, summary_size)
+        hook_lines = _measure(probe, scene["title"], hook_font, inner_width)
+        summary_lines = _measure(probe, scene["line"], summary_font, inner_width)
+        hook_gap = hook_size + 12
+        summary_gap = summary_size + 10
+        content_h = BOX_PAD_Y + brand_h + (len(hook_lines) * hook_gap) + 12 + (len(summary_lines) * summary_gap) + BOX_PAD_Y
+
+    box_top = BOX_TOP_MIN
+    box_bottom = min(BOX_BOTTOM_MAX, box_top + content_h)
 
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
-    od.rectangle((0, box_top - 80, W, H), fill=(7, 18, 45, 70))
-    od.rounded_rectangle((box_left, box_top, box_right, box_bottom), radius=28, fill=(7, 18, 45, 230), outline=(255, 214, 88, 230), width=3)
+    od.rectangle((0, box_top - 70, W, H), fill=(7, 18, 45, 70))
+    od.rounded_rectangle((box_left, box_top, box_right, box_bottom), radius=28, fill=(7, 18, 45, 232), outline=(255, 214, 88, 230), width=3)
     frame = Image.alpha_composite(frame, overlay)
     draw = ImageDraw.Draw(frame)
 
-    brand_font = load_font(font_path, 30)
-    hook_font, hook_lines, hook_gap = _fit_text(draw, scene["title"], font_path, 68, 42, inner_width, 2)
-    summary_font, summary_lines, summary_gap = _fit_text(draw, scene["line"], font_path, 48, 32, inner_width, 3)
-
-    content_h = 36 + (len(hook_lines) * hook_gap) + 12 + (len(summary_lines) * summary_gap)
-    max_content_h = box_bottom - box_top - (BOX_PAD_Y * 2)
-    while content_h > max_content_h and hook_font.size > 42:
-        hook_font, hook_lines, hook_gap = _fit_text(draw, scene["title"], font_path, hook_font.size - 4, 36, inner_width, 2)
-        summary_font, summary_lines, summary_gap = _fit_text(draw, scene["line"], font_path, summary_font.size - 4, 28, inner_width, 3)
-        content_h = 36 + (len(hook_lines) * hook_gap) + 12 + (len(summary_lines) * summary_gap)
-
     y = box_top + BOX_PAD_Y
+    brand_font = load_font(font_path, 28)
     brand = "รอบรู้ : INSIGHT"
     brand_box = draw.textbbox((0, 0), brand, font=brand_font)
     brand_x = inner_left + (inner_width - (brand_box[2] - brand_box[0])) // 2
     draw.text((brand_x, y), brand, font=brand_font, fill=(255, 214, 88))
-    y += 44
+    y += brand_h
     y = _draw_centered_lines(draw, hook_lines, hook_font, y, "white", hook_gap, inner_left, inner_right)
-    y += 10
+    y += 8
     _draw_centered_lines(draw, summary_lines, summary_font, y, (255, 240, 160), summary_gap, inner_left, inner_right)
 
     footer = "การ์ตูนล้อเลียนเพื่อความบันเทิง | ตรวจสอบข่าวต้นทางก่อนแชร์"
     footer_font = load_font(font_path, 24)
     footer_box = draw.textbbox((0, 0), footer, font=footer_font)
     footer_x = (W - (footer_box[2] - footer_box[0])) // 2
-    draw.text((footer_x, 1828), footer, font=footer_font, fill=(225, 235, 248))
+    draw.text((footer_x, 1834), footer, font=footer_font, fill=(225, 235, 248))
     return frame.convert("RGB")
 
 

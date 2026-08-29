@@ -2,7 +2,6 @@ name: Football video draft
 
 on:
   schedule:
-    # GitHub Actions uses UTC: 07:00, 10:00, 12:00, 15:00, 18:00, 20:00 Asia/Bangkok.
     - cron: "0 0,3,5,8,11,13 * * *"
   workflow_dispatch:
 
@@ -40,10 +39,11 @@ jobs:
       - name: Validate required secrets
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
         run: |
-          test -n "$OPENAI_API_KEY" || { echo "Missing OPENAI_API_KEY secret"; exit 1; }
+          if [ -z "$OPENAI_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then echo "Need OPENAI_API_KEY or GEMINI_API_KEY"; exit 1; fi
           test -n "$FB_PAGE_ID" || { echo "Missing FB_PAGE_ID secret"; exit 1; }
           test -n "$FB_PAGE_TOKEN" || { echo "Missing FB_PAGE_TOKEN secret"; exit 1; }
 
@@ -51,6 +51,9 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: gpt-5-mini
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_IMAGE_MODEL: gemini-3.1-flash-image
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FONT_PATH: ${{ github.workspace }}/fonts/NotoSansThai-Regular.ttf

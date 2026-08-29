@@ -2,7 +2,6 @@ name: Scheduled football poster
 
 on:
   schedule:
-    # GitHub Actions uses UTC. These are 07:00, 10:00, 12:00, 15:00, 18:00 and 20:00 Asia/Bangkok (UTC+7).
     - cron: "0 0,3,5,8,11,13 * * *"
   workflow_dispatch:
 
@@ -32,10 +31,11 @@ jobs:
       - name: Validate required secrets
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
         run: |
-          test -n "$OPENAI_API_KEY" || { echo "Missing OPENAI_API_KEY secret"; exit 1; }
+          if [ -z "$OPENAI_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then echo "Need OPENAI_API_KEY or GEMINI_API_KEY"; exit 1; fi
           test -n "$FB_PAGE_ID" || { echo "Missing FB_PAGE_ID secret"; exit 1; }
           test -n "$FB_PAGE_TOKEN" || { echo "Missing FB_PAGE_TOKEN secret"; exit 1; }
 
@@ -43,6 +43,8 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: gpt-5-mini
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FONT_PATH: ${{ github.workspace }}/fonts/NotoSansThai-Regular.ttf
@@ -55,7 +57,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [ -f state.json ]; then
-            # state.json stays ignored for local runs, but Actions must persist it.
             git add -f state.json
             if ! git diff --cached --quiet; then
               git commit -m "chore: update posted-news state"
@@ -63,6 +64,4 @@ jobs:
             else
               echo "state.json is unchanged"
             fi
-          else
-            echo "state.json was not created; nothing to persist"
           fi

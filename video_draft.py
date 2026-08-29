@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a review-only 15-second Thai football AI cartoon motion-comic draft."""
+"""Create a 15-second Thai football motion-comic and post it to the Facebook Page."""
 from __future__ import annotations
 
 import base64
@@ -16,7 +16,14 @@ import requests
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 from openai import OpenAI
 
-from football_poster import DEFAULT_FEEDS, NewsItem, fetch_feed, find_related_image, load_state, required_env, save_state
+from football_poster import (
+    DEFAULT_FEEDS,
+    NewsItem,
+    fetch_feed,
+    find_related_image,
+    required_env,
+    write_post,
+)
 
 LOG = logging.getLogger("video_draft")
 W, H = 1080, 1920
@@ -61,6 +68,29 @@ def wrap(draw, text: str, font, width: int) -> list[str]:
     return lines or [text]
 
 
+def load_video_state(path: Path) -> dict:
+    if not path.exists():
+        return {"drafted_ids": [], "posted_ids": [], "updated_at": None}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        LOG.warning("Cannot read video state: %s", exc)
+        return {"drafted_ids": [], "posted_ids": [], "updated_at": None}
+    return {
+        "drafted_ids": list(data.get("drafted_ids", [])),
+        "posted_ids": list(data.get("posted_ids", [])),
+        "updated_at": data.get("updated_at"),
+    }
+
+
+def save_video_state(path: Path, state: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state["drafted_ids"] = list(dict.fromkeys(state.get("drafted_ids", [])))[-5000:]
+    state["posted_ids"] = list(dict.fromkeys(state.get("posted_ids", [])))[-5000:]
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def validate_news(item: NewsItem) -> None:
     if not item.title.strip() or not item.summary.strip() or not item.url.startswith("http"):
         raise ValueError("ข่าวไม่มี title, summary หรือ URL ที่ตรวจสอบได้")
@@ -81,7 +111,6 @@ def fallback_storyboard(item: NewsItem) -> dict[str, object]:
 
 
 def generate_storyboard(item: NewsItem) -> dict[str, object]:
-    """Validate the article, then ask the model for a four-scene Thai storyboard."""
     validate_news(item)
     client = OpenAI()
     request = {
@@ -260,58 +289,115 @@ def draw_scene(base: Image.Image, scene: dict[str, str], scene_index: int, font_
 
 def render_video(scene_images: list[Path], storyboard: dict[str, object], output: Path, font_path: str) -> None:
     bases = [prepare_scene(path) for path in scene_images]
+    composed = []
     with tempfile.TemporaryDirectory(prefix="football-video-") as tmp:
-        frames = Path(tmp)
-        frames_per_scene = FPS * DURATION // SCENE_COUNT
-        for frame_no in range(FPS * DURATION):
-            scene_index = min(SCENE_COUNT - 1, frame_no // frames_per_scene)
-            rendered = draw_scene(bases[scene_index], storyboard["scenes"][scene_index], scene_index, font_path)
-            rendered.save(frames / f"frame_{frame_no:05d}.jpg", quality=90)
+        tmp_path = Path(tmp)
+        for index, base in enumerate(bases):
+            frame = draw_scene(base, storyboard["scenes"][index], index, font_path)
+            frame_path = tmp_path / f"scene_{index + 1:02d}.jpg"
+            frame.save(frame_path, quality=92)
+            composed.append(frame_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run([
-            "ffmpeg", "-y", "-framerate", str(FPS), "-i", str(frames / "frame_%05d.jpg"),
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output),
-        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        scene_len = DURATION / SCENE_COUNT
+        cmd = ["ffmpeg", "-y"]
+        for path in composed:
+            cmd.extend(["-loop", "1", "-t", f"{scene_len:.2f}", "-i", str(path)])
+        inputs = "".join(f"[{i}:v]" for i in range(len(composed)))
+        cmd.extend([
+            "-filter_complex", f"{inputs}concat=n={len(composed)}:v=1:a=0,format=yuv420p[v]",
+            "-map", "[v]", "-r", str(FPS), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", str(output),
+        ])
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def build_caption(item: NewsItem, storyboard: dict[str, object]) -> str:
+    try:
+        post = write_post(item, {"main_angle": "คลิปการ์ตูนล้อเลียนข่าวฟุตบอล", "reason": item.summary[:200]})
+        tags = " ".join(str(tag).strip() for tag in post.get("hashtags", []) if str(tag).strip())
+        parts = [post["hook"].strip(), post["body"].strip(), post["cta"].strip(), tags]
+    except Exception as exc:
+        LOG.warning("write_post failed; using storyboard caption: %s", exc)
+        parts = [str(storyboard.get("caption") or item.title)]
+    parts.extend([
+        "การ์ตูนล้อเลียนเพื่อความบันเทิง ตรวจสอบข่าวต้นทางก่อนแชร์",
+        f"แหล่งข่าว: {item.source} {item.url}",
+    ])
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def publish_video(video: Path, caption: str, page_id: str, token: str) -> dict:
+    if not video.is_file() or video.stat().st_size == 0:
+        raise RuntimeError(f"Video file missing: {video}")
+    version = env("FB_API_VERSION", "v23.0")
+    url = f"https://graph.facebook.com/{version}/{page_id}/videos"
+    with video.open("rb") as handle:
+        response = requests.post(
+            url,
+            data={
+                "access_token": token,
+                "description": caption,
+                "title": caption.split("\n", 1)[0][:80],
+            },
+            files={"source": (video.name, handle, "video/mp4")},
+            timeout=(20, 180),
+        )
+    if not response.ok:
+        raise RuntimeError(f"Facebook video API error {response.status_code}: {response.text[:500]}")
+    return response.json()
 
 
 def main() -> int:
     logging.basicConfig(level=getattr(logging, env("LOG_LEVEL", "INFO").upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
     output_dir = Path(env("VIDEO_DRAFT_DIR", "video_drafts"))
     state_path = Path(env("VIDEO_STATE_FILE", "video_draft_state.json"))
-    state = load_state(state_path)
-    drafted = set(state.get("drafted_ids", []))
+    state = load_video_state(state_path)
+    used = set(state.get("drafted_ids", [])) | set(state.get("posted_ids", []))
     feed_env = {"BBC Sport": "RSS_BBC_URL", "ESPN": "RSS_ESPN_URL", "The Guardian": "RSS_GUARDIAN_URL", "FourFourTwo": "RSS_FOURFOURTWO_URL"}
     feeds = {name: env(feed_env[name], url) for name, url in DEFAULT_FEEDS.items()}
-    items = [item for source, url in feeds.items() for item in fetch_feed(source, url) if item.id not in drafted and item.image_url]
+    items = [item for source, url in feeds.items() for item in fetch_feed(source, url) if item.id not in used and item.image_url]
     if not items:
-        LOG.info("No new news with RSS images available for video draft")
+        LOG.info("No new news with RSS images available for video")
         return 0
     item = items[0]
     item.image_url, item.image_source, item.image_credit = find_related_image(item)
     if not item.image_url:
-        raise RuntimeError("No real news image found; video draft was skipped")
+        raise RuntimeError("No real news image found; video was skipped")
     storyboard = generate_storyboard(item)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     scene_dir = output_dir / f"scenes_{stamp}"
     scene_results = generate_scene_images(item, storyboard, scene_dir)
     video_path = output_dir / f"football_motion_comic_{stamp}.mp4"
     render_video([Path(entry["path"]) for entry in scene_results], storyboard, video_path, required_env("FONT_PATH"))
+    caption = build_caption(item, storyboard)
     draft = {
         "created_at": stamp,
         "duration_seconds": DURATION,
         "format": "vertical 1080x1920 MP4",
-        "status": "draft_pending_review",
-        "pipeline": ["news_validated", "storyboard_prompt_written", "four_ai_images_generated", "video_rendered", "pending_review"],
+        "status": "ready_to_post",
+        "pipeline": ["news_validated", "storyboard_prompt_written", "four_ai_images_generated", "video_rendered"],
         "item": asdict(item),
         "storyboard": storyboard,
         "scene_images": scene_results,
         "video": str(video_path),
+        "caption": caption,
         "review_notes": "ตรวจชื่อผู้เล่น ตัวเลข ความหมายของข่าว ความเหมาะสมของมุก ภาพทั้ง 4 ฉาก และสิทธิ์สื่อก่อนเผยแพร่",
     }
+    should_post = env("POST_TO_FACEBOOK", "1") not in {"0", "false", "no"} and env("VIDEO_DRY_RUN") not in {"1", "true", "yes"}
+    if should_post:
+        result = publish_video(video_path, caption, required_env("FB_PAGE_ID"), required_env("FB_PAGE_TOKEN"))
+        draft["status"] = "posted"
+        draft["facebook"] = result
+        draft["pipeline"].append("posted_to_facebook")
+        state.setdefault("posted_ids", []).append(item.id)
+        LOG.info("Published video to Facebook: %s", result)
+    else:
+        draft["status"] = "draft_pending_review"
+        LOG.info("Skipped Facebook publish (dry-run or POST_TO_FACEBOOK disabled)")
     video_path.with_suffix(".json").write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
     state.setdefault("drafted_ids", []).append(item.id)
-    save_state(state_path, state)
-    LOG.info("Created four-scene AI video draft: %s", video_path)
+    save_video_state(state_path, state)
+    LOG.info("Created video: %s", video_path)
     return 0
 
 

@@ -16,7 +16,7 @@ concurrency:
 jobs:
   create-draft:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,15 +40,23 @@ jobs:
       - name: Validate required secrets
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: test -n "$OPENAI_API_KEY" || { echo "Missing OPENAI_API_KEY secret"; exit 1; }
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "Missing OPENAI_API_KEY secret"; exit 1; }
+          test -n "$FB_PAGE_ID" || { echo "Missing FB_PAGE_ID secret"; exit 1; }
+          test -n "$FB_PAGE_TOKEN" || { echo "Missing FB_PAGE_TOKEN secret"; exit 1; }
 
-      - name: Create video draft
+      - name: Create video and post to Facebook
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: gpt-5-mini
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FONT_PATH: ${{ github.workspace }}/fonts/NotoSansThai-Regular.ttf
           VIDEO_DRAFT_DIR: video_drafts
           VIDEO_STATE_FILE: video_draft_state.json
+          POST_TO_FACEBOOK: "1"
         run: python video_draft.py
 
       - name: Upload draft artifact

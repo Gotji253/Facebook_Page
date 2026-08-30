@@ -53,7 +53,7 @@ jobs:
           FONT_PATH: ${{ github.workspace }}/fonts/NotoSansThai-Regular.ttf
           STATE_FILE: state.json
           OUTPUT_IMAGE: output/latest.jpg
-        run: python -c "import football_poster, slim_rank; football_poster.rank_news = slim_rank.rank_news; raise SystemExit(football_poster.main())"
+        run: python -c "import football_poster, poster_llm; poster_llm.patch(); raise SystemExit(football_poster.main())"
 
       - name: Persist state
         run: |

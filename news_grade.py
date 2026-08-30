@@ -122,7 +122,7 @@ def finalize(item, llm_row: dict[str, Any] | None = None, minimum: int = POSTER_
         **local,
     }
     LOG.info(
-        "Grade %s | score=%s | min=%s | worthy=%s | gossip=%s | %s",
+        "Grade score=%s min=%s worthy=%s gossip=%s | %s",
         row["score"],
         minimum,
         worthy,

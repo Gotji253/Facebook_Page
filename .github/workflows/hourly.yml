@@ -45,7 +45,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: gpt-5-mini
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_MODEL: gemini-3.6-flash
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_CHAT_MODEL: Qwen/Qwen2.5-7B-Instruct
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}

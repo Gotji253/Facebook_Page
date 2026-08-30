@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 import football_poster
+import news_grade
 import shared_stories
 from ai_client import chat_json
 
@@ -23,6 +24,14 @@ FAN_WRITE = (
     "cta ชวนเลือกข้างหรือคอมเมนต์ และ hashtags ภาษาไทย 3-5 รายการ"
 )
 
+RANK_PROMPT = (
+    "บรรณาธิการเพจแฟนบอลไทย ตอบ JSON เท่านั้น "
+    'รูปแบบ {"items":[{"id":"","score":0,"is_worthy":true,"main_angle":"","reason":""}]} '
+    "ให้คะแนน 0-100 จาก ใคร 25 อะไร 25 ทัน 20 เล่าต่อ 15 คนเถียง 15 "
+    "ทีมดัง พรีเมียร์ลีก ย้ายทีมปิดดีล ผลแข่ง ดราม่ากุนซือ ได้คะแนนสูง "
+    "ข่าวซุบซิบรวมหลายเรื่อง ข่าวลือรวม paper talk ให้ score ไม่เกิน 40 และ is_worthy=false"
+)
+
 
 def rank_news(items: list) -> dict[str, dict[str, Any]]:
     payload = [
@@ -35,30 +44,18 @@ def rank_news(items: list) -> dict[str, dict[str, Any]]:
         }
         for item in items[:16]
     ]
-    data = chat_json(
-        (
-            "บรรณาธิการเพจแฟนบอลไทย ตอบ JSON เท่านั้น "
-            'รูปแบบ {"items":[{"id":"","score":0,"is_worthy":true,"main_angle":"","reason":""}]} '
-            "ให้คะแนนสูงกับข่าวที่คนไทยแชร์ได้ ย้ายทีมดัง ผลแข่ง พรีเมียร์ลีก ดราม่าผู้จัดการ "
-            "ตัดข่าวซุบซิบรวมหลายเรื่องและข่าวทั่วไป"
-        ),
-        json.dumps(payload, ensure_ascii=False),
-    )
-    results: dict[str, dict[str, Any]] = {}
+    data = chat_json(RANK_PROMPT, json.dumps(payload, ensure_ascii=False))
+    raw: dict[str, dict[str, Any]] = {}
     for item in data.get("items", []) if isinstance(data, dict) else []:
-        if not isinstance(item, dict) or not item.get("id"):
-            continue
-        ident = str(item["id"])
-        results[ident] = {
-            "id": ident,
-            "score": max(0, min(100, float(item.get("score", 0) or 0))),
-            "is_worthy": bool(item.get("is_worthy", False)),
-            "main_angle": str(item.get("main_angle", ""))[:500],
-            "reason": str(item.get("reason", ""))[:1000],
-        }
+        if isinstance(item, dict) and item.get("id"):
+            raw[str(item["id"])] = item
+    results: dict[str, dict[str, Any]] = {}
+    for item in items:
+        results[item.id] = news_grade.finalize(item, raw.get(item.id), news_grade.POSTER_MIN)
+    worthy = sum(1 for row in results.values() if row.get("is_worthy"))
+    LOG.info("Ranked %s items, %s passed poster grade %s", len(results), worthy, news_grade.POSTER_MIN)
     if not results:
         raise RuntimeError("rank_news ไม่ได้รายการข่าวกลับมา")
-    LOG.info("Ranked %s items via fallback LLM chain", len(results))
     return results
 
 
@@ -70,6 +67,7 @@ def write_post(item, score: dict[str, Any]) -> dict[str, Any]:
         "source": getattr(item, "source", ""),
         "angle": score.get("main_angle", ""),
         "reason": score.get("reason", ""),
+        "grade": score.get("score", ""),
     }
     post = chat_json(FAN_WRITE, json.dumps(post_input, ensure_ascii=False))
     if not isinstance(post, dict):

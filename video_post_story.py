@@ -31,7 +31,7 @@ def review_on_screen_text(item, storyboard: dict) -> dict:
         errors.append("ข้อความฉาก 1 ถูกตัดกลาง")
     if looks_truncated(str(scenes[1].get("title") or "") or str(scenes[1].get("line") or "")):
         errors.append("ข้อความฉาก 2 ถูกตัดกลาง")
-    if not same_story(s1, s2):
+    if not same_story(s1, s2, item):
         errors.append("ฉาก 1 กับฉาก 2 ไม่ใช่ข่าวเดียวกัน")
     if copied_scene(s1, s2):
         errors.append("ฉาก 2 คัดลอกข้อความฉาก 1")

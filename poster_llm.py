@@ -33,6 +33,13 @@ RANK_PROMPT = (
 )
 
 
+def _rule_rank(items: list) -> dict[str, dict[str, Any]]:
+    results = {item.id: news_grade.finalize(item, None, news_grade.POSTER_MIN) for item in items}
+    worthy = sum(1 for row in results.values() if row.get("is_worthy"))
+    LOG.info("Rule-ranked %s items, %s passed poster grade %s", len(results), worthy, news_grade.POSTER_MIN)
+    return results
+
+
 def rank_news(items: list) -> dict[str, dict[str, Any]]:
     payload = [
         {
@@ -44,7 +51,11 @@ def rank_news(items: list) -> dict[str, dict[str, Any]]:
         }
         for item in items[:16]
     ]
-    data = chat_json(RANK_PROMPT, json.dumps(payload, ensure_ascii=False))
+    try:
+        data = chat_json(RANK_PROMPT, json.dumps(payload, ensure_ascii=False))
+    except Exception as exc:
+        LOG.warning("LLM rank failed; using rule grade: %s", exc)
+        return _rule_rank(items)
     raw: dict[str, dict[str, Any]] = {}
     for item in data.get("items", []) if isinstance(data, dict) else []:
         if isinstance(item, dict) and item.get("id"):
@@ -55,8 +66,27 @@ def rank_news(items: list) -> dict[str, dict[str, Any]]:
     worthy = sum(1 for row in results.values() if row.get("is_worthy"))
     LOG.info("Ranked %s items, %s passed poster grade %s", len(results), worthy, news_grade.POSTER_MIN)
     if not results:
-        raise RuntimeError("rank_news ไม่ได้รายการข่าวกลับมา")
+        return _rule_rank(items)
     return results
+
+
+def _fallback_post(item, score: dict[str, Any]) -> dict[str, Any]:
+    title = re.sub(r"\s+", " ", str(getattr(item, "title", "") or "")).strip()
+    summary = re.sub(r"\s+", " ", str(getattr(item, "summary", "") or "")).strip()
+    hook = (score.get("main_angle") or title)[:40].strip() or title[:40]
+    body_bits = [title]
+    if summary and summary.lower() not in title.lower():
+        body_bits.append(summary[:280])
+    reason = str(score.get("reason") or "").strip()
+    if reason and reason not in body_bits[-1]:
+        body_bits.append(reason[:180])
+    body = "\n".join(body_bits[:4])
+    return {
+        "hook": hook,
+        "body": body[:3000],
+        "cta": "แฟนบอลมองเรื่องนี้ยังไงครับ?",
+        "hashtags": ["#ข่าวฟุตบอล", "#รอบรู้Insight", "#พรีเมียร์ลีก"],
+    }
 
 
 def write_post(item, score: dict[str, Any]) -> dict[str, Any]:
@@ -69,18 +99,25 @@ def write_post(item, score: dict[str, Any]) -> dict[str, Any]:
         "reason": score.get("reason", ""),
         "grade": score.get("score", ""),
     }
-    post = chat_json(FAN_WRITE, json.dumps(post_input, ensure_ascii=False))
+    try:
+        post = chat_json(FAN_WRITE, json.dumps(post_input, ensure_ascii=False))
+    except Exception as exc:
+        LOG.warning("LLM write_post failed; using template caption: %s", exc)
+        return _fallback_post(item, score)
     if not isinstance(post, dict):
-        raise ValueError("write_post ได้ข้อมูลไม่ใช่ JSON object")
+        LOG.warning("write_post ได้ข้อมูลไม่ใช่ JSON object; using template caption")
+        return _fallback_post(item, score)
     missing = [field for field in ("hook", "body", "cta", "hashtags") if field not in post]
     if missing:
-        raise ValueError("write_post JSON ขาดฟิลด์: " + ", ".join(missing))
+        LOG.warning("write_post JSON ขาดฟิลด์: %s; using template caption", ", ".join(missing))
+        return _fallback_post(item, score)
     hook = re.sub(r"[\U00010000-\U0010ffff]", "", str(post.get("hook") or "")).strip()[:100]
     body = str(post.get("body") or "").strip()[:3000]
     cta = str(post.get("cta") or "").strip()[:500]
     tags = [str(tag).strip()[:80] for tag in (post.get("hashtags") or []) if str(tag).strip()][:5]
     if not hook or not body or not cta or len(tags) < 3:
-        raise ValueError("write_post ฟิลด์ไม่ครบหลังทำความสะอาด")
+        LOG.warning("write_post ฟิลด์ไม่ครบหลังทำความสะอาด; using template caption")
+        return _fallback_post(item, score)
     return {"hook": hook, "body": body, "cta": cta, "hashtags": tags}
 
 

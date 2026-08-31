@@ -315,10 +315,33 @@ def text_key(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
-def same_story(scene1: str, scene2: str) -> bool:
+def story_aliases(item) -> set[str]:
+    blob = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}"
+    aliases = story_tokens(blob)
+    for name in news_names(item):
+        aliases.add(name.lower())
+        aliases.add(name.split()[-1].lower())
+    lowered = blob.lower()
+    for key, club in CLUB_MAP.items():
+        if key in lowered or club.lower() in lowered:
+            aliases.add(key)
+            aliases.update(story_tokens(club))
+    return {token for token in aliases if token and len(token) >= 3}
+
+
+def same_story(scene1: str, scene2: str, item=None) -> bool:
     left = story_tokens(scene1)
     right = story_tokens(scene2)
-    return bool(left and right and (left & right))
+    if left and right and (left & right):
+        return True
+    if item is None:
+        return False
+    anchors = story_aliases(item)
+    text1 = f"{scene1 or ''}".lower()
+    text2 = f"{scene2 or ''}".lower()
+    hit1 = bool(left & anchors) or any(token in text1 for token in anchors)
+    hit2 = bool(right & anchors) or any(token in text2 for token in anchors)
+    return bool(hit1 and hit2)
 
 
 def copied_scene(scene1: str, scene2: str) -> bool:
@@ -363,7 +386,12 @@ def source_detail(item) -> str:
             bits.append(f"ผลสกอร์ {scores[0]}")
     elif clubs:
         bits.append(f"รายละเอียดเกมของ {clubs[0]}")
-    text = " ".join(bits).strip() or "รายละเอียดเพิ่มจากข่าวต้นทางยังอยู่ในประเด็นเดียวกัน"
+    anchors = []
+    if names:
+        anchors.append(names[0])
+    if clubs:
+        anchors.append(clubs[0])
+    text = " ".join(bits + anchors).strip() or "รายละเอียดเพิ่มจากข่าวต้นทางยังอยู่ในประเด็นเดียวกัน"
     return readable_thai(complete_phrase(text, 140))
 
 

@@ -86,23 +86,35 @@ def main() -> int:
     if not ranked:
         LOG.info("No story reached video grade %s; skipped this round", news_grade.VIDEO_MIN)
         return 0
-    picked = ranked[0]
-    LOG.info("Video pick %s | score=%s", picked.title[:90], scores.get(picked.id, {}).get("score"))
     first_source = next(iter(DEFAULT_FEEDS))
+    last_error = None
+    for picked in ranked[:8]:
+        LOG.info("Video pick %s | score=%s", picked.title[:90], scores.get(picked.id, {}).get("score"))
 
-    def only_winner(source, url):
-        return [picked] if source == first_source else []
+        def only_winner(source, url, _picked=picked):
+            return [_picked] if source == first_source else []
 
-    vd.fetch_feed = only_winner
-    vd.find_related_image = find_related_image
-    fp.find_related_image = find_related_image
-    try:
-        return _orig_main()
-    except RuntimeError as exc:
-        if "No real news image" in str(exc):
-            LOG.info("Top graded story had no usable photo; skipped this round")
-            return 0
-        raise
+        vd.fetch_feed = only_winner
+        vd.find_related_image = find_related_image
+        fp.find_related_image = find_related_image
+        try:
+            return _orig_main()
+        except RuntimeError as exc:
+            msg = str(exc)
+            retryable = (
+                "No real news image" in msg
+                or "ไม่ใช่ข่าวเดียวกัน" in msg
+                or "ข้อความบนคลิปไม่ผ่าน" in msg
+            )
+            if retryable:
+                LOG.warning("Skip video candidate (%s): %s", picked.title[:80], exc)
+                last_error = exc
+                continue
+            raise
+    if last_error:
+        LOG.info("No video candidate passed image/review checks; skipped this round")
+        return 0
+    return 0
 
 vd.fallback_storyboard = fallback_storyboard
 vd.generate_storyboard = generate_storyboard

@@ -5,6 +5,7 @@ import logging
 import ai_client
 import football_poster as fp
 import news_grade
+import poster_fix
 import poster_llm
 import shared_stories
 import video_draft as vd
@@ -16,6 +17,7 @@ from video_post_photos import generate_scene_images
 LOG = logging.getLogger("video_post")
 ai_client._hf_image = generate_hf_image
 vd.DURATION = 10
+poster_fix.patch()
 
 _orig_fetch = fetch_feed
 _orig_story = generate_storyboard

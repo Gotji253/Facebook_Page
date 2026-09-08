@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
+import caption_th
 import football_poster
 import news_grade
 import shared_stories
@@ -15,13 +15,8 @@ from ai_client import chat_json
 LOG = logging.getLogger("poster_llm")
 
 FAN_WRITE = (
-    "เขียนโพสต์ข่าวฟุตบอลเป็นภาษาแฟนบอลไทย ล้วน และตอบเป็น JSON object เท่านั้น "
-    "ห้ามใช้ Markdown หรือ code fence และห้ามใช้อีโมจิใน hook "
-    "ใช้ชื่อที่แฟนไทยเรียกถ้ามี เช่น สาลิกาดง ไก่เดือยทอง หงส์แดง ปืนใหญ่ เรือใบสีฟ้า ผีแดง กัคโป มาร์ติเนซ "
-    "ห้ามแปลอังกฤษคำต่อคำ ห้ามโทนข่าวราชการ "
-    "hook สั้นแรงไม่เกินประมาณ 40 ตัวอักษร "
-    "body มี 3-5 บรรทัด เว้นวรรคอ่านง่ายบนมือถือ มีตัวเลขหรือเหตุผลถ้าข่าวมี "
-    "cta ชวนเลือกข้างหรือคอมเมนต์ และ hashtags ภาษาไทย 3-5 รายการ"
+    caption_th.prompt_block()
+    + " ห้ามใช้ Markdown หรือ code fence และห้ามใช้อีโมจิใน hook"
 )
 
 RANK_PROMPT = (
@@ -71,21 +66,14 @@ def rank_news(items: list) -> dict[str, dict[str, Any]]:
 
 
 def _fallback_post(item, score: dict[str, Any]) -> dict[str, Any]:
-    title = re.sub(r"\s+", " ", str(getattr(item, "title", "") or "")).strip()
-    summary = re.sub(r"\s+", " ", str(getattr(item, "summary", "") or "")).strip()
-    hook = (score.get("main_angle") or title)[:40].strip() or title[:40]
-    body_bits = [title]
-    if summary and summary.lower() not in title.lower():
-        body_bits.append(summary[:280])
-    reason = str(score.get("reason") or "").strip()
-    if reason and reason not in body_bits[-1]:
-        body_bits.append(reason[:180])
-    body = "\n".join(body_bits[:4])
+    polished = caption_th.write_caption_th(item, None, score)
     return {
-        "hook": hook,
-        "body": body[:3000],
-        "cta": "แฟนบอลมองเรื่องนี้ยังไงครับ?",
-        "hashtags": ["#ข่าวฟุตบอล", "#รอบรู้Insight", "#พรีเมียร์ลีก"],
+        "hook": polished["hook"],
+        "body": polished["body"],
+        "cta": polished["cta"],
+        "hashtags": polished["hashtags"],
+        "why": polished.get("why", ""),
+        "grade": polished.get("grade", {}),
     }
 
 
@@ -98,27 +86,33 @@ def write_post(item, score: dict[str, Any]) -> dict[str, Any]:
         "angle": score.get("main_angle", ""),
         "reason": score.get("reason", ""),
         "grade": score.get("score", ""),
+        "voice": caption_th.VOICE_RULES,
     }
+    post = None
     try:
         post = chat_json(FAN_WRITE, json.dumps(post_input, ensure_ascii=False))
     except Exception as exc:
         LOG.warning("LLM write_post failed; using template caption: %s", exc)
-        return _fallback_post(item, score)
+        post = None
     if not isinstance(post, dict):
-        LOG.warning("write_post ได้ข้อมูลไม่ใช่ JSON object; using template caption")
-        return _fallback_post(item, score)
-    missing = [field for field in ("hook", "body", "cta", "hashtags") if field not in post]
-    if missing:
-        LOG.warning("write_post JSON ขาดฟิลด์: %s; using template caption", ", ".join(missing))
-        return _fallback_post(item, score)
-    hook = re.sub(r"[\U00010000-\U0010ffff]", "", str(post.get("hook") or "")).strip()[:100]
-    body = str(post.get("body") or "").strip()[:3000]
-    cta = str(post.get("cta") or "").strip()[:500]
-    tags = [str(tag).strip()[:80] for tag in (post.get("hashtags") or []) if str(tag).strip()][:5]
-    if not hook or not body or not cta or len(tags) < 3:
-        LOG.warning("write_post ฟิลด์ไม่ครบหลังทำความสะอาด; using template caption")
-        return _fallback_post(item, score)
-    return {"hook": hook, "body": body, "cta": cta, "hashtags": tags}
+        polished = caption_th.polish_post(item, None, score)
+    else:
+        polished = caption_th.polish_post(item, post, score)
+    LOG.info(
+        "Caption type=%s grade=%s ok=%s | %s",
+        polished.get("type"),
+        (polished.get("grade") or {}).get("score"),
+        (polished.get("grade") or {}).get("ok"),
+        polished.get("hook"),
+    )
+    return {
+        "hook": polished["hook"],
+        "body": polished["body"],
+        "cta": polished["cta"],
+        "hashtags": polished["hashtags"],
+        "why": polished.get("why", ""),
+        "grade": polished.get("grade", {}),
+    }
 
 
 _orig_fetch = football_poster.fetch_feed

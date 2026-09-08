@@ -3,6 +3,7 @@
 from __future__ import annotations
 import logging
 import ai_client
+import caption_th
 import football_poster as fp
 import news_grade
 import poster_fix
@@ -53,6 +54,24 @@ def find_related_image(item):
     if fallback:
         return fallback, getattr(item, "image_source", "rss"), getattr(item, "image_credit", "")
     return "", "", ""
+
+
+def build_caption(item, storyboard, music=None):
+    post = caption_th.write_caption_th(item, storyboard if isinstance(storyboard, dict) else None)
+    if not (post.get("grade") or {}).get("ok"):
+        post = caption_th.polish_post(item, post)
+    text = caption_th.format_facebook(post)
+    extra = []
+    if music:
+        extra.append(f"เพลงประกอบ: {music.get('label', music.get('style'))}")
+    source = getattr(item, "source", "")
+    url = getattr(item, "url", "")
+    if source or url:
+        extra.append(f"แหล่งข่าว: {source} {url}".strip())
+    if extra:
+        text = text + "\n\n" + "\n\n".join(extra)
+    LOG.info("Video caption grade=%s ok=%s", (post.get("grade") or {}).get("score"), (post.get("grade") or {}).get("ok"))
+    return text
 
 
 def main() -> int:
@@ -127,6 +146,7 @@ vd.validate_news = validate_news
 vd.publish_video = publish_video
 vd.save_video_state = save_video_state
 vd.find_related_image = find_related_image
+vd.build_caption = build_caption
 vd.main = main
 
 if __name__ == "__main__":

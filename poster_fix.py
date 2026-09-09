@@ -12,17 +12,21 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 from PIL import Image
 
 import football_poster as fp
+import image_pick
 
 LOG = logging.getLogger("football_poster")
 
 
-def image_is_acceptable(url: str, width: int, height: int, title: str = "", min_width: int | None = None, min_height: int | None = None) -> bool:
+def image_is_acceptable(url: str, width: int, height: int, title: str = "", min_width: int | None = None, min_height: int | None = None, item=None) -> bool:
     min_width = int(min_width if min_width is not None else fp.env("IMAGE_MIN_WIDTH", "900"))
     min_height = int(min_height if min_height is not None else fp.env("IMAGE_MIN_HEIGHT", "500"))
     if not url or width < min_width or height < min_height:
         return False
-    haystack = f"{url} {title}".lower()
-    return not any(term in haystack for term in fp.IMAGE_BAD_TERMS)
+    if image_pick.looks_bad(url, title):
+        return False
+    if not image_pick.aspect_ok(width, height, poster=True):
+        return False
+    return image_pick.score_photo(url, width, height, title, item, poster=True) > 0
 
 
 def image_url_variants(url: str) -> list[str]:
@@ -35,19 +39,20 @@ def image_url_variants(url: str) -> list[str]:
     if any(key in upgraded_query for key in ("width", "w", "imwidth")):
         for key in ("width", "w", "imwidth"):
             if key in upgraded_query:
-                upgraded_query[key] = ["1200"]
+                upgraded_query[key] = ["1600"]
         variants.append(urlunparse(parsed._replace(query=urlencode(upgraded_query, doseq=True))))
-    if parsed.query and ("i.guim.co.uk" in parsed.netloc or "ichef.bbci.co.uk" in parsed.netloc):
+    if parsed.query and any(host in parsed.netloc for host in ("i.guim.co.uk", "ichef.bbci.co.uk", "a.espncdn.com")):
         variants.append(urlunparse(parsed._replace(query="")))
     variants.append(url)
     patterns = (
-        (r"/140/", "/1200/"),
-        (r"/240/", "/976/"),
-        (r"/320/", "/976/"),
-        (r"/400/", "/976/"),
-        (r"/480/", "/976/"),
-        (r"/640/", "/976/"),
-        (r"/768/", "/976/"),
+        (r"/140/", "/1600/"),
+        (r"/240/", "/1600/"),
+        (r"/320/", "/1600/"),
+        (r"/400/", "/1600/"),
+        (r"/480/", "/1600/"),
+        (r"/640/", "/1600/"),
+        (r"/768/", "/1600/"),
+        (r"/976/", "/1600/"),
         (r"/1024/", "/1600/"),
     )
     expanded: list[str] = []
@@ -60,20 +65,29 @@ def image_url_variants(url: str) -> list[str]:
     return list(dict.fromkeys(expanded))
 
 
+def _probe(url: str, item, title: str = "") -> dict | None:
+    try:
+        response = fp.http_get(url, stream=True)
+        with Image.open(response.raw) as image:
+            width, height = image.size
+        if not image_is_acceptable(url, width, height, title or item.title, min_width=800, min_height=450, item=item):
+            return None
+        return {"url": url, "width": width, "height": height, "title": title or item.title, "item": item}
+    except Exception:
+        return None
+
+
 def search_rss_image(item) -> tuple[str, str, str]:
+    rows = []
     for candidate in image_url_variants(item.image_url):
-        try:
-            response = fp.http_get(candidate, stream=True)
-            with Image.open(response.raw) as image:
-                width, height = image.size
-            if not image_is_acceptable(candidate, width, height, item.title, min_width=800, min_height=450):
-                LOG.warning("RSS image rejected: size=%sx%s or disallowed URL: %s", width, height, candidate)
-                continue
-            LOG.info("RSS image selected: %sx%s from %s", width, height, candidate)
-            return candidate, f"{item.source} RSS", f"ภาพจาก {item.source}: {item.url}"
-        except Exception as exc:
-            LOG.warning("RSS image variant unavailable (%s): %s", candidate, exc)
-    return "", "", ""
+        row = _probe(candidate, item)
+        if row:
+            rows.append(row)
+    best = image_pick.best_candidate(rows, poster=True)
+    if not best:
+        return "", "", ""
+    LOG.info("RSS image selected: %sx%s from %s", best["width"], best["height"], best["url"])
+    return best["url"], f"{item.source} RSS", f"ภาพจาก {item.source}: {item.url}"
 
 
 def search_article_image(item) -> tuple[str, str, str]:
@@ -93,31 +107,34 @@ def search_article_image(item) -> tuple[str, str, str]:
     ):
         for match in re.finditer(pattern, html_text, re.I):
             found.append(urljoin(item.url, fp.html.unescape(match.group(1).strip())))
+    rows = []
     seen: set[str] = set()
     for raw in found:
         if not raw or raw in seen:
             continue
         seen.add(raw)
+        if image_pick.looks_bad(raw):
+            continue
         if not re.search(r"\.(jpe?g|png|webp)(?:$|\?)", raw, re.I) and "image" not in raw.lower():
             continue
-        for candidate in image_url_variants(raw):
-            try:
-                response = fp.http_get(candidate, stream=True)
-                with Image.open(response.raw) as image:
-                    width, height = image.size
-                if not image_is_acceptable(candidate, width, height, item.title, min_width=800, min_height=450):
-                    continue
-                LOG.info("Article image selected: %sx%s from %s", width, height, candidate)
-                return candidate, f"{item.source} article", f"ภาพจาก {item.source}: {item.url}"
-            except Exception:
-                continue
-    return "", "", ""
+        for candidate in image_url_variants(raw)[:4]:
+            row = _probe(candidate, item)
+            if row:
+                rows.append(row)
+                break
+        if len(rows) >= 8:
+            break
+    best = image_pick.best_candidate(rows, poster=True)
+    if not best:
+        return "", "", ""
+    LOG.info("Article image selected: %sx%s from %s", best["width"], best["height"], best["url"])
+    return best["url"], f"{item.source} article", f"ภาพจาก {item.source}: {item.url}"
 
 
 def find_related_image(item) -> tuple[str, str, str]:
     provider = fp.env("IMAGE_PROVIDER", "auto").lower()
     providers = [provider] if provider not in ("auto", "all") else [
-        "rss", "article", "wikimedia", "openverse", "unsplash", "reddit", "bing", "google"
+        "article", "rss", "wikimedia", "openverse", "unsplash", "reddit", "bing", "google"
     ]
     searchers = {
         "rss": search_rss_image,

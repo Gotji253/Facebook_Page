@@ -1,8 +1,7 @@
 name: Football video draft
 
+# PAUSED 2026-09-13: automatic schedule disabled. Manual dispatch still works.
 on:
-  schedule:
-    - cron: "0 23,10 * * *"
   workflow_dispatch:
     inputs:
       post_to_facebook:

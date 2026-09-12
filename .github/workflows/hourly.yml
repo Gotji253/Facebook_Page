@@ -1,8 +1,7 @@
 name: Scheduled football poster
 
+# PAUSED 2026-09-13: automatic schedule disabled. Manual dispatch still works.
 on:
-  schedule:
-    - cron: "0 5,8,13 * * *"
   workflow_dispatch:
 
 permissions:
